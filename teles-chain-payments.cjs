@@ -1,6 +1,6 @@
 "use strict";
 
-const TRON_USDT_CONTRACT = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj";
+const TRON_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const BSC_USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
 const TRANSFER_TOPIC =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -100,7 +100,8 @@ async function fetchTronTransfers(options = {}) {
 
 async function bscRpc(method, params, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
-  const endpoint = process.env.BSC_RPC_URL || "https://bsc-dataseed.binance.org";
+  const endpoint =
+    process.env.BSC_RPC_URL || "https://bnb.rpc.subquery.network/public";
   const body = await fetchJson(
     endpoint,
     {

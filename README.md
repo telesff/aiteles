@@ -37,7 +37,7 @@ APP_URL=https://egatusad.com node setup-webhook.js
 | `USDT_BEP20_ADDRESS` | Payments | BSC wallet that receives automatic USDT BEP20 payments. |
 | `TRONGRID_API_KEY` | Optional | Free TronGrid key for higher TRC20 lookup limits. Basic public requests work without it. |
 | `TRON_API_URL` | Optional | TronGrid-compatible endpoint. Defaults to `https://api.trongrid.io`. |
-| `BSC_RPC_URL` | Optional | BSC JSON-RPC endpoint. Defaults to Binance's public endpoint. |
+| `BSC_RPC_URL` | Optional | BSC JSON-RPC endpoint with `eth_getLogs` support. Defaults to SubQuery's public BSC endpoint. |
 | `BSC_CONFIRMATIONS` | Optional | Required BEP20 block confirmations. Defaults to 12. |
 | `BSC_SCAN_BLOCKS` | Optional | Recent BSC blocks searched per check. Defaults to 5,000. |
 
