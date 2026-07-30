@@ -35,9 +35,13 @@ test("production Telegram routing forwards callback queries", () => {
   assert.match(server, /allowed_updates:\["message","callback_query"\]/);
 });
 
-test("production payments create and deliver campaign invoices", () => {
+test("production payments poll for automatic on-chain confirmation", () => {
   assert.match(server, /require\("\.\/teles-invoice\.cjs"\)/);
-  assert.match(server, /__telesInvoice\.handlePaymentSubmission/);
-  assert.match(server, /invoiceNumber:n\.details\.invoiceNumber/);
-  assert.match(server, /invoiceDelivered:n\.delivered/);
+  assert.match(server, /__telesInvoice\.startOrCheckAutomaticPayment/);
+  assert.match(server, /if\(n\.status!=="paid"\)/);
+  assert.match(server, /Payment confirmed automatically/);
+  assert.doesNotMatch(server, /__telesInvoice\.handlePaymentSubmission/);
+  assert.match(frontend, /Automatic USDT Payment/);
+  assert.match(frontend, /setInterval\(j,1e4\)/);
+  assert.doesNotMatch(frontend, /Transaction Hash \(TXID\)/);
 });

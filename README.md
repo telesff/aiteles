@@ -33,6 +33,13 @@ APP_URL=https://egatusad.com node setup-webhook.js
 | `APP_URL` | Optional | Public app URL. Defaults to `https://egatusad.com`. |
 | `AUTO_SETUP_WEBHOOK` | Optional | Keeps the Telegram webhook pointed at `APP_URL` on startup. Set to `false` only when managed externally. |
 | `AGENT_MONITOR_INTERVAL_MS` | Optional | Campaign milestone polling interval. Defaults to 15 minutes and has a 60-second minimum. |
+| `USDT_TRC20_ADDRESS` | Payments | TRON wallet that receives automatic USDT TRC20 payments. |
+| `USDT_BEP20_ADDRESS` | Payments | BSC wallet that receives automatic USDT BEP20 payments. |
+| `TRONGRID_API_KEY` | Optional | Free TronGrid key for higher TRC20 lookup limits. Basic public requests work without it. |
+| `TRON_API_URL` | Optional | TronGrid-compatible endpoint. Defaults to `https://api.trongrid.io`. |
+| `BSC_RPC_URL` | Optional | BSC JSON-RPC endpoint. Defaults to Binance's public endpoint. |
+| `BSC_CONFIRMATIONS` | Optional | Required BEP20 block confirmations. Defaults to 12. |
+| `BSC_SCAN_BLOCKS` | Optional | Recent BSC blocks searched per check. Defaults to 5,000. |
 
 ## Teles Agent 🤖
 
@@ -43,13 +50,25 @@ The built-in AI assistant. It knows the platform, live package pricing from the 
 - **Persistent memory:** bot conversations survive app restarts when PostgreSQL is configured; `/clear` removes saved memory.
 - **Channel intelligence:** `/copy <public channel>` samples public posts, estimates view rate and budget, and creates a reviewable campaign brief. Metrics are explicitly presented as estimates.
 - **Campaign operations:** `/health` scores active campaign delivery, while the background monitor sends deduplicated 25/50/75/100% milestone updates.
-- **Payment invoices:** submitting valid crypto payment details records the invoice, generates a PDF receipt, and sends it to the campaign owner's Telegram chat.
+- **Automatic USDT payments:** the payment page assigns a temporary exact amount, then polls confirmed TRC20 or BEP20 transfers without asking the customer for a transaction ID. Confirmed payments activate the campaign and send its PDF invoice through Telegram.
 - **Human handoff:** `/human` creates a support ticket containing the user's request.
 - **Multi-provider failover:** requests rotate through the OpenRouter key pool. Key-specific failures try another key; an OpenRouter network or server outage switches immediately to NVIDIA. OpenRouter defaults to `openrouter/free`, which selects from its currently available free models. NVIDIA defaults to the lightweight hosted NIM model `meta/llama-3.1-8b-instruct`.
 
 Package member targets accept exact values (`5000`, `5,000`, `2.5k`) and ranges
 (`3k–5k`). A range uses its upper value as the campaign/report target. Invalid or empty
 targets are rejected instead of silently falling back to 2,000 members.
+
+### Automatic payment matching
+
+TRC20 verification reads confirmed USDT transfers from TronGrid. BEP20 verification reads
+USDT `Transfer` logs from BSC JSON-RPC and waits for the configured confirmation count. Both
+can use free public endpoints. Because customers share receiving wallets, each pending invoice
+gets a unique amount with three decimal places for two hours. The customer must send that exact
+amount on the selected network. The service never needs a wallet private key or seed phrase.
+
+Public blockchain APIs can throttle traffic. Set a free `TRONGRID_API_KEY` and a dedicated free-tier
+BSC RPC URL when production volume grows. API downtime leaves the invoice pending and polling
+continues; it never marks an unverified payment as paid.
 
 ## Branding & Images
 
@@ -104,6 +123,7 @@ server.cjs                    Bundled Express server
 teles-agent.cjs               Teles Agent — bot and Mini App integration
 teles-ai-client.cjs           OpenRouter/NVIDIA credential rotation and failover
 teles-invoice.cjs             Payment recording, PDF invoice generation, and Telegram delivery
+teles-chain-payments.cjs      Confirmed TRC20/BEP20 USDT transfer detection
 public/index.html             Static app entry point
 public/teles-enhancements.js  Avatar picker + AI chat widget
 public/images/                Logo + avatars

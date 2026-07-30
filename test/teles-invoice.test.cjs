@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  allocateExpectedAmount,
   buildInvoiceDetails,
   createInvoicePdf,
   handlePaymentSubmission,
@@ -9,6 +10,17 @@ const {
   paymentMethodLabel,
   sendInvoiceToTelegram,
 } = require("../teles-invoice.cjs");
+
+test("allocates an unused exact amount and rejects invalid prices", async () => {
+  const db = {
+    query: async () => ({
+      rows: [{ expected_amount: "359.001" }, { expected_amount: "359.002" }],
+    }),
+  };
+
+  assert.equal(await allocateExpectedAmount(db, 359, "usdt_trc20"), 359.003);
+  await assert.rejects(allocateExpectedAmount(db, 0, "usdt_trc20"), /positive campaign amount/i);
+});
 
 test("builds stable campaign invoice details", () => {
   const paidAt = new Date("2026-07-30T05:30:00.000Z");
@@ -91,7 +103,7 @@ test("sends the PDF to the campaign owner through Telegram", async () => {
     assert.match(request.url, /sendDocument$/);
     assert.equal(request.options.method, "POST");
     assert.equal(request.options.body.get("chat_id"), "7049127887");
-    assert.equal(paymentMethodLabel("btcb_bep20"), "BTCB (BEP20)");
+    assert.equal(paymentMethodLabel("usdt_bep20"), "USDT (BEP20)");
   } finally {
     if (previousToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = previousToken;

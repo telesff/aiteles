@@ -3,11 +3,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const PDFDocument = require("pdfkit");
+const { detectConfirmedTransfer, paymentNetwork } = require("./teles-chain-payments.cjs");
 
 const PAYMENT_METHODS = {
   usdt_trc20: "USDT (TRC20)",
   usdt_bep20: "USDT (BEP20)",
-  btcb_bep20: "BTCB (BEP20)",
 };
 
 let pool = null;
@@ -52,8 +52,15 @@ async function ensureInvoiceSchema() {
         ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_method TEXT;
         ALTER TABLE invoices ADD COLUMN IF NOT EXISTS sender_wallet TEXT;
         ALTER TABLE invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP;
+        ALTER TABLE invoices ADD COLUMN IF NOT EXISTS expected_amount NUMERIC(18,6);
+        ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_address TEXT;
+        ALTER TABLE invoices ADD COLUMN IF NOT EXISTS monitoring_started_at TIMESTAMP;
+        ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_expires_at TIMESTAMP;
+        ALTER TABLE invoices ADD COLUMN IF NOT EXISTS chain_confirmations INTEGER;
         CREATE UNIQUE INDEX IF NOT EXISTS invoices_payment_id_idx
           ON invoices (payment_id) WHERE payment_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS invoices_invoice_number_idx
+          ON invoices (invoice_number);
       `)
       .catch((error) => {
         schemaReady = null;
@@ -70,7 +77,7 @@ function buildInvoiceDetails(input) {
   const requestedPaidAt =
     input.paidAt instanceof Date ? input.paidAt : new Date(input.paidAt || Date.now());
   const paidAt = Number.isNaN(requestedPaidAt.getTime()) ? new Date() : requestedPaidAt;
-  const amount = Number(campaign.price);
+  const amount = Number(input.amount ?? campaign.price);
   if (!Number.isFinite(amount) || amount < 0) {
     throw new Error("A valid campaign amount is required to create an invoice.");
   }
@@ -89,9 +96,9 @@ function buildInvoiceDetails(input) {
   };
 }
 
-async function recordPayment(details) {
-  const db = await ensureInvoiceSchema();
-  if (!db) return;
+async function recordPayment(details, dbOverride) {
+  const db = dbOverride || (await ensureInvoiceSchema());
+  if (!db) return false;
   const duplicate = await db.query(
     "SELECT invoice_number FROM invoices WHERE payment_id = $1 AND invoice_number <> $2 LIMIT 1",
     [details.paymentId, details.invoiceNumber]
@@ -102,12 +109,13 @@ async function recordPayment(details) {
     throw error;
   }
   try {
-    await db.query(
+    const inserted = await db.query(
       `INSERT INTO invoices
         (invoice_number, package_name, amount, status, campaign_id, telegram_id, channel_link,
-         payment_id, payment_method, sender_wallet, paid_at, created_at)
-       VALUES ($1,$2,$3,'paid',$4,$5,$6,$7,$8,$9,$10,NOW())
-       ON CONFLICT DO NOTHING`,
+         payment_id, payment_method, sender_wallet, paid_at, chain_confirmations, created_at)
+       VALUES ($1,$2,$3,'paid',$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+       ON CONFLICT (invoice_number) DO NOTHING
+       RETURNING invoice_number`,
       [
         details.invoiceNumber,
         details.packageName,
@@ -119,8 +127,39 @@ async function recordPayment(details) {
         details.paymentMethod,
         details.senderWallet,
         details.paidAt,
+        details.confirmations || 1,
       ]
     );
+    if (inserted.rowCount) return true;
+
+    const updated = await db.query(
+      `UPDATE invoices SET
+         status = 'paid',
+         campaign_id = $2,
+         telegram_id = $3,
+         channel_link = $4,
+         payment_id = $5,
+         payment_method = $6,
+         sender_wallet = $7,
+         paid_at = $8,
+         chain_confirmations = $9,
+         amount = $10
+       WHERE invoice_number = $1 AND status <> 'paid'
+       RETURNING invoice_number`,
+      [
+        details.invoiceNumber,
+        details.campaignId,
+        details.telegramId,
+        details.channelLink,
+        details.paymentId,
+        details.paymentMethod,
+        details.senderWallet,
+        details.paidAt,
+        details.confirmations || 1,
+        details.amount,
+      ]
+    );
+    return updated.rowCount > 0;
   } catch (error) {
     if (error.code === "23505") {
       const duplicateError = new Error(
@@ -131,27 +170,184 @@ async function recordPayment(details) {
     }
     throw error;
   }
-  await db.query(
-    `UPDATE invoices SET
-       status = 'paid',
-       campaign_id = $2,
-       telegram_id = $3,
-       channel_link = $4,
-       payment_id = $5,
-       payment_method = $6,
-       sender_wallet = $7,
-       paid_at = $8
-     WHERE invoice_number = $1`,
-    [
-      details.invoiceNumber,
-      details.campaignId,
-      details.telegramId,
-      details.channelLink,
-      details.paymentId,
-      details.paymentMethod,
-      details.senderWallet,
-      details.paidAt,
-    ]
+}
+
+async function allocateExpectedAmount(db, baseAmount, method) {
+  const numericAmount = Number(baseAmount);
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    throw new Error("A valid positive campaign amount is required.");
+  }
+  const baseUnits = Math.ceil(numericAmount * 1_000);
+  const result = await db.query(
+    `SELECT expected_amount FROM invoices
+     WHERE status = 'pending' AND payment_method = $1
+       AND payment_expires_at > NOW() AND expected_amount IS NOT NULL`,
+    [method]
+  );
+  const used = new Set(result.rows.map((row) => Number(row.expected_amount).toFixed(3)));
+  for (let slot = 1; slot <= 999; slot += 1) {
+    const candidate = (baseUnits + slot) / 1_000;
+    if (!used.has(candidate.toFixed(3))) return candidate;
+  }
+  throw new Error("No automatic payment amount is currently available. Please retry shortly.");
+}
+
+async function withTransaction(db, callback) {
+  const client = typeof db.connect === "function" ? await db.connect() : db;
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    if (client !== db && typeof client.release === "function") client.release();
+  }
+}
+
+async function prepareAutomaticPayment(input) {
+  const campaign = input.campaign || {};
+  const method = String(input.method || "");
+  const network = paymentNetwork(method);
+  if (!network || !PAYMENT_METHODS[method]) {
+    throw new Error("Select USDT TRC20 or USDT BEP20.");
+  }
+  const db = input.db || (await ensureInvoiceSchema());
+  if (!db) throw new Error("Automatic payment verification requires PostgreSQL.");
+  const invoiceNumber = invoiceNumberForCampaign(campaign.id);
+  return withTransaction(db, async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `teles-payment-allocation:${method}`,
+    ]);
+    let result = await client.query(
+      "SELECT * FROM invoices WHERE invoice_number = $1 LIMIT 1 FOR UPDATE",
+      [invoiceNumber]
+    );
+    if (!result.rowCount) {
+      await client.query(
+        `INSERT INTO invoices (invoice_number, package_name, amount, status, campaign_id,
+          telegram_id, channel_link, created_at)
+         VALUES ($1,$2,$3,'pending',$4,$5,$6,NOW())
+         ON CONFLICT (invoice_number) DO NOTHING`,
+        [
+          invoiceNumber,
+          clean(campaign.packageName),
+          Number(campaign.price),
+          Number(campaign.id),
+          Number(campaign.telegramId || input.telegramUserId) || null,
+          clean(campaign.channelLink),
+        ]
+      );
+      result = await client.query(
+        "SELECT * FROM invoices WHERE invoice_number = $1 LIMIT 1 FOR UPDATE",
+        [invoiceNumber]
+      );
+    }
+    const invoice = result.rows[0];
+    if (invoice.status === "paid") return { db, invoice, network, alreadyPaid: true };
+    const reusable =
+      invoice.payment_method === method &&
+      invoice.expected_amount &&
+      invoice.payment_expires_at &&
+      new Date(invoice.payment_expires_at).getTime() > Date.now();
+    if (reusable) return { db, invoice, network, alreadyPaid: false };
+
+    const expectedAmount = await allocateExpectedAmount(client, campaign.price, method);
+    const monitoringStartedAt = new Date();
+    const expiresAt = new Date(monitoringStartedAt.getTime() + 2 * 60 * 60 * 1_000);
+    await client.query(
+      `UPDATE invoices SET campaign_id=$2, telegram_id=$3, channel_link=$4,
+         payment_method=$5, expected_amount=$6, payment_address=$7,
+         monitoring_started_at=$8, payment_expires_at=$9
+       WHERE invoice_number=$1`,
+      [
+        invoiceNumber,
+        Number(campaign.id),
+        Number(campaign.telegramId || input.telegramUserId) || null,
+        clean(campaign.channelLink),
+        method,
+        expectedAmount,
+        network.address,
+        monitoringStartedAt,
+        expiresAt,
+      ]
+    );
+    const updated = await client.query(
+      "SELECT * FROM invoices WHERE invoice_number = $1 LIMIT 1",
+      [invoiceNumber]
+    );
+    return { db, invoice: updated.rows[0], network, alreadyPaid: false };
+  });
+}
+
+function automaticPaymentResponse(invoice, extra = {}) {
+  return {
+    status: invoice.status === "paid" ? "paid" : "pending",
+    invoiceNumber: invoice.invoice_number,
+    method: invoice.payment_method,
+    paymentAddress: invoice.payment_address,
+    expectedAmount: Number(invoice.expected_amount || invoice.amount),
+    expiresAt: invoice.payment_expires_at
+      ? new Date(invoice.payment_expires_at).toISOString()
+      : null,
+    paymentId: invoice.payment_id || null,
+    ...extra,
+  };
+}
+
+async function startOrCheckAutomaticPayment(input) {
+  const prepared = await prepareAutomaticPayment(input);
+  if (prepared.alreadyPaid) return automaticPaymentResponse(prepared.invoice);
+  const invoice = prepared.invoice;
+  let transfer;
+  try {
+    transfer = await detectConfirmedTransfer({
+      method: invoice.payment_method,
+      expectedAmount: Number(invoice.expected_amount),
+      since: new Date(invoice.monitoring_started_at),
+      fetchImpl: input.fetchImpl,
+    });
+  } catch (error) {
+    console.error(`Invoice ${invoice.invoice_number}: chain lookup delayed:`, error.message);
+    return automaticPaymentResponse(invoice, { verificationDelayed: true });
+  }
+  if (!transfer) return automaticPaymentResponse(invoice);
+
+  const details = buildInvoiceDetails({
+    campaign: input.campaign,
+    telegramUserId: input.telegramUserId,
+    method: invoice.payment_method,
+    txid: transfer.txid,
+    senderWallet: transfer.from,
+    paidAt: transfer.paidAt,
+    amount: transfer.amount,
+  });
+  details.confirmations = transfer.confirmations;
+  const newlyRecorded = await recordPayment(details, prepared.db);
+  if (!newlyRecorded) {
+    const current = await prepared.db.query(
+      "SELECT * FROM invoices WHERE invoice_number = $1 LIMIT 1",
+      [details.invoiceNumber]
+    );
+    return automaticPaymentResponse(current.rows[0] || { ...invoice, status: "paid" });
+  }
+  const pdf = await createInvoicePdf(details);
+  let delivered = false;
+  try {
+    delivered = await sendInvoiceToTelegram(details, pdf, input.telegramFetchImpl || fetch);
+  } catch (error) {
+    console.error(`Invoice ${details.invoiceNumber}: Telegram delivery failed:`, error.message);
+  }
+  return automaticPaymentResponse(
+    {
+      ...invoice,
+      status: "paid",
+      payment_id: transfer.txid,
+      expected_amount: transfer.amount,
+    },
+    { justConfirmed: true, invoiceDelivered: delivered }
   );
 }
 
@@ -277,10 +473,13 @@ async function handlePaymentSubmission(input) {
 }
 
 module.exports = {
+  allocateExpectedAmount,
+  automaticPaymentResponse,
   buildInvoiceDetails,
   createInvoicePdf,
   handlePaymentSubmission,
   invoiceNumberForCampaign,
   paymentMethodLabel,
   sendInvoiceToTelegram,
+  startOrCheckAutomaticPayment,
 };
