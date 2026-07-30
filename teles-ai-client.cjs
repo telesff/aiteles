@@ -51,16 +51,8 @@ function createAiClient(options = {}) {
   const nvidiaKeys = splitList(env.NVIDIA_API_KEYS, env.NVIDIA_API_KEY);
   const openRouterModels = splitList(env.OPENROUTER_MODELS);
   const nvidiaModels = splitList(env.NVIDIA_MODELS);
-  const orModels = openRouterModels.length
-    ? openRouterModels
-    : [
-        "openrouter/free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "google/gemma-4-31b-it:free",
-        "openai/gpt-oss-20b:free",
-      ];
-  const nvModels = nvidiaModels.length ? nvidiaModels : ["meta/llama-3.3-70b-instruct"];
+  const orModels = openRouterModels.length ? openRouterModels : ["openrouter/free"];
+  const nvModels = nvidiaModels.length ? nvidiaModels : ["meta/llama-3.1-8b-instruct"];
   let requestNumber = 0;
 
   async function attempt(provider, key, keyIndex, keyCount, model, messages) {

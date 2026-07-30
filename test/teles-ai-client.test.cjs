@@ -84,3 +84,31 @@ test("rotates the first credential between requests", async () => {
   await client.complete(messages);
   assert.deepEqual(authorizations, ["Bearer or-one", "Bearer or-two"]);
 });
+
+test("uses the free OpenRouter router by default", async () => {
+  let body;
+  const client = createAiClient({
+    env: { OPENROUTER_API_KEY: "or-one" },
+    logger: silentLogger,
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return reply(200, "ok");
+    },
+  });
+  await client.complete(messages);
+  assert.equal(body.model, "openrouter/free");
+});
+
+test("uses the lightweight NVIDIA model by default", async () => {
+  let body;
+  const client = createAiClient({
+    env: { NVIDIA_API_KEY: "nv-one" },
+    logger: silentLogger,
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return reply(200, "ok");
+    },
+  });
+  await client.complete(messages);
+  assert.equal(body.model, "meta/llama-3.1-8b-instruct");
+});
