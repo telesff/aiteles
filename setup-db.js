@@ -141,15 +141,8 @@ ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_id TEXT;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_method TEXT;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS sender_wallet TEXT;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP;
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS expected_amount NUMERIC(18,6);
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_address TEXT;
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS monitoring_started_at TIMESTAMP;
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_expires_at TIMESTAMP;
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS chain_confirmations INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS invoices_payment_id_idx
   ON invoices (payment_id) WHERE payment_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS invoices_invoice_number_idx
-  ON invoices (invoice_number);
 
 CREATE TABLE IF NOT EXISTS feedback (
   id SERIAL PRIMARY KEY,

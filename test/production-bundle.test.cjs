@@ -9,10 +9,6 @@ const frontend = fs.readFileSync(
   path.join(root, "public/assets/index-DTEWTEAe.js"),
   "utf8"
 );
-const frontendCss = fs.readFileSync(
-  path.join(root, "public/assets/index-6wOoSUvw.css"),
-  "utf8"
-);
 
 test("production Telegram routing prioritizes /start", () => {
   assert.match(
@@ -39,18 +35,19 @@ test("production Telegram routing forwards callback queries", () => {
   assert.match(server, /allowed_updates:\["message","callback_query"\]/);
 });
 
-test("production payments poll for automatic on-chain confirmation", () => {
+test("production payments create and deliver campaign invoices", () => {
   assert.match(server, /require\("\.\/teles-invoice\.cjs"\)/);
-  assert.match(server, /__telesInvoice\.startOrCheckAutomaticPayment/);
-  assert.match(server, /if\(n\.status!=="paid"\)/);
-  assert.match(server, /Payment confirmed automatically/);
-  assert.doesNotMatch(server, /__telesInvoice\.handlePaymentSubmission/);
-  assert.match(frontend, /Automatic USDT Payment/);
-  assert.match(frontend, /setInterval\(j,1e4\)/);
-  assert.doesNotMatch(frontend, /Transaction Hash \(TXID\)/);
+  assert.match(server, /__telesInvoice\.handlePaymentSubmission/);
+  assert.match(server, /invoiceNumber:n\.details\.invoiceNumber/);
+  assert.match(server, /invoiceDelivered:n\.delivered/);
+  assert.match(frontend, /Transaction Hash \(TXID\)/);
+  assert.match(frontend, /Sender Wallet Address/);
+  assert.match(frontend, /I Have Paid/);
+  assert.doesNotMatch(frontend, /Automatic USDT Payment/);
+  assert.doesNotMatch(server, /startOrCheckAutomaticPayment/);
 });
 
-test("campaign APIs isolate records by Telegram owner", () => {
+test("campaign APIs isolate records by signed Telegram owner", () => {
   assert.match(
     server,
     /if\(a\.valid&&a\.userId\)\{t\.telegramUserId=a\.userId/
@@ -76,15 +73,4 @@ test("campaign APIs isolate records by Telegram owner", () => {
     server,
     /if\(!i\.telegramId\|\|Number\(t\.telegramUserId\)!==Number\(i\.telegramId\)\)/
   );
-});
-
-test("automatic payment UI contains long values and exposes copy feedback", () => {
-  assert.match(frontend, /aria-label":"Copy receiving address"/);
-  assert.match(frontend, /children:b\?"Copied":"Copy"/);
-  assert.match(frontend, /document\.execCommand\("copy"\)/);
-  assert.match(frontend, /payment-address-row/);
-  assert.match(frontendCss, /\.payment-address\{[^}]+overflow-wrap:anywhere/);
-  assert.match(frontendCss, /\.payment-copy-button\{[^}]+min-width:82px/);
-  assert.match(frontendCss, /@media\(max-width:360px\)/);
-  assert.doesNotMatch(frontend, /bg-amber-500\/10 border border-amber-500\/20/);
 });
