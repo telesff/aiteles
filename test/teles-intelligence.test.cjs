@@ -61,14 +61,16 @@ test("combines Telegram metadata with sampled public post metrics", async () => 
   assert.equal(result.postsLast7d, 1);
 });
 
-test("builds a package-based copy budget with the managed minimum", () => {
+test("selects a package tier for the channel size", () => {
   const result = estimateCopyBudget(30_000, [
-    { members: "5k", price: 500 },
-    { members: "10k", price: 800 },
+    { name: "Starter", members: "5k", price: 500 },
+    { name: "Scale", members: "10k", price: 800 },
   ]);
-  assert.equal(result.suggestedTarget, 3_000);
-  assert.equal(result.minimumBudget, 789);
-  assert.equal(result.estimatedBudget, 790);
+  assert.equal(result.suggestedTarget, 5_000);
+  assert.equal(result.minimumBudget, 500);
+  assert.equal(result.estimatedBudget, 500);
+  assert.equal(result.recommendedPackage, "Starter");
+  assert.equal(result.audienceCoverage, 16.7);
 });
 
 test("campaign health uses delivery progress and terminal status", () => {

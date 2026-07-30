@@ -34,3 +34,10 @@ test("production Telegram routing forwards callback queries", () => {
   assert.match(server, /r\?\.callback_query\?\.from\?\.id/);
   assert.match(server, /allowed_updates:\["message","callback_query"\]/);
 });
+
+test("production payments create and deliver campaign invoices", () => {
+  assert.match(server, /require\("\.\/teles-invoice\.cjs"\)/);
+  assert.match(server, /__telesInvoice\.handlePaymentSubmission/);
+  assert.match(server, /invoiceNumber:n\.details\.invoiceNumber/);
+  assert.match(server, /invoiceDelivered:n\.delivered/);
+});

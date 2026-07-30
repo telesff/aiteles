@@ -25,11 +25,31 @@ function replaceExpected(file, before, after, expectedCount = 1) {
   console.log(`Patched: ${file}`);
 }
 
+function ensureServerRequire(modulePath, variableName) {
+  const file = path.join(root, "server.cjs");
+  const anchor = '"use strict";var __telesAgent=require("./teles-agent.cjs");';
+  const statement = `var ${variableName}=require("${modulePath}");`;
+  let content = fs.readFileSync(file, "utf8");
+  const withoutDuplicates = content.split(statement).join("");
+  if (!withoutDuplicates.includes(anchor)) {
+    throw new Error(`server.cjs: missing require anchor for ${modulePath}`);
+  }
+  const patched = withoutDuplicates.replace(anchor, anchor + statement);
+  if (patched !== content) {
+    fs.writeFileSync(file, patched, "utf8");
+    console.log(`Ensured require: ${modulePath}`);
+  } else {
+    console.log(`Already required: ${modulePath}`);
+  }
+}
+
 replaceExpected(
   "server.cjs",
   'process.env.APP_URL||"https://telesads.com"',
   'process.env.APP_URL||"https://egatusad.com"'
 );
+
+ensureServerRequire("./teles-invoice.cjs", "__telesInvoice");
 
 replaceExpected(
   "server.cjs",
@@ -54,6 +74,18 @@ replaceExpected(
   "server.cjs",
   'Ku.post("/agent/chat",(t,e)=>__telesAgent.apiChat(t,e,{db:P,packages:Fe}))',
   'Ku.post("/agent/chat",(t,e)=>__telesAgent.apiChat(t,e,{db:P,packages:Fe,campaigns:pe}))'
+);
+
+replaceExpected(
+  "server.cjs",
+  'Hi.post("/campaigns/:id/payment",async(t,e)=>{let r=parseInt(t.params.id),[i]=await P.select().from(pe).where(K(pe.id,r));if(!i){e.status(404).json({error:"Campaign not found"});return}await P.update(pe).set({status:"active"}).where(K(pe.id,r)),tn(`',
+  'Hi.post("/campaigns/:id/payment",async(t,e)=>{let r=parseInt(t.params.id),[i]=await P.select().from(pe).where(K(pe.id,r));if(!i){e.status(404).json({error:"Campaign not found"});return}let n;try{n=await __telesInvoice.handlePaymentSubmission({campaign:i,telegramUserId:t.telegramUserId,...(t.body||{})})}catch(a){e.status(a.code==="PAYMENT_ID_REUSED"?409:400).json({error:a.message});return}await P.update(pe).set({status:"active"}).where(K(pe.id,r)),tn(`'
+);
+
+replaceExpected(
+  "server.cjs",
+  'Campaign is now active. Verify payment and start delivery.`),e.json({success:!0,message:"Payment submitted. Campaign will start within 15-30 minutes."})});',
+  'Campaign is now active. Verify payment and start delivery.`),e.json({success:!0,message:"Payment submitted. Campaign will start within 15-30 minutes.",invoiceNumber:n.details.invoiceNumber,invoiceDelivered:n.delivered})});'
 );
 
 replaceExpected(

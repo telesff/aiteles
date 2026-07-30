@@ -116,27 +116,55 @@ function parsePackageTarget(value) {
 }
 
 function estimateCopyBudget(subscriberCount, packages = []) {
-  const packageRates = packages
+  const packageOptions = packages
     .map((item) => {
       const target = parsePackageTarget(item.members || "");
       const price = Number(item.price);
-      return target && price > 0 ? price / target : null;
+      return target && price > 0
+        ? {
+            name: item.name || "Growth Package",
+            target,
+            price,
+            rate: price / target,
+          }
+        : null;
     })
-    .filter((rate) => rate && Number.isFinite(rate))
-    .sort((a, b) => a - b);
-  const medianRate = packageRates.length
-    ? packageRates[Math.floor(packageRates.length / 2)]
-    : 0.08;
-  const suggestedTarget = Math.min(
-    100_000,
-    Math.max(2_500, Math.round((Number(subscriberCount) || 0) * 0.1))
-  );
-  const estimated = Math.max(789, suggestedTarget * medianRate);
+    .filter((item) => item && Number.isFinite(item.rate))
+    .sort((a, b) => a.target - b.target);
+  const subscribers = Math.max(0, Number(subscriberCount) || 0);
+
+  if (packageOptions.length) {
+    const tier =
+      subscribers >= 50_000
+        ? packageOptions.length - 1
+        : subscribers >= 10_000
+          ? Math.floor((packageOptions.length - 1) / 2)
+          : 0;
+    const selected = packageOptions[tier];
+    return {
+      minimumBudget: selected.price,
+      estimatedBudget: selected.price,
+      suggestedTarget: selected.target,
+      estimatedCostPerMember: Number(selected.rate.toFixed(4)),
+      recommendedPackage: selected.name,
+      audienceCoverage: subscribers
+        ? Number(((selected.target / subscribers) * 100).toFixed(1))
+        : null,
+    };
+  }
+
+  const suggestedTarget = Math.min(100_000, Math.max(2_500, Math.round(subscribers * 0.1)));
+  const estimatedCostPerMember = 0.08;
+  const estimatedBudget = Math.ceil((suggestedTarget * estimatedCostPerMember) / 10) * 10;
   return {
-    minimumBudget: 789,
-    estimatedBudget: Math.ceil(estimated / 10) * 10,
+    minimumBudget: estimatedBudget,
+    estimatedBudget,
     suggestedTarget,
-    estimatedCostPerMember: Number(medianRate.toFixed(4)),
+    estimatedCostPerMember,
+    recommendedPackage: "Custom Growth Campaign",
+    audienceCoverage: subscribers
+      ? Number(((suggestedTarget / subscribers) * 100).toFixed(1))
+      : null,
   };
 }
 

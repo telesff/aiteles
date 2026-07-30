@@ -43,6 +43,7 @@ The built-in AI assistant. It knows the platform, live package pricing from the 
 - **Persistent memory:** bot conversations survive app restarts when PostgreSQL is configured; `/clear` removes saved memory.
 - **Channel intelligence:** `/copy <public channel>` samples public posts, estimates view rate and budget, and creates a reviewable campaign brief. Metrics are explicitly presented as estimates.
 - **Campaign operations:** `/health` scores active campaign delivery, while the background monitor sends deduplicated 25/50/75/100% milestone updates.
+- **Payment invoices:** submitting valid crypto payment details records the invoice, generates a PDF receipt, and sends it to the campaign owner's Telegram chat.
 - **Human handoff:** `/human` creates a support ticket containing the user's request.
 - **Multi-provider failover:** requests rotate through the OpenRouter key pool. Key-specific failures try another key; an OpenRouter network or server outage switches immediately to NVIDIA. OpenRouter defaults to `openrouter/free`, which selects from its currently available free models. NVIDIA defaults to the lightweight hosted NIM model `meta/llama-3.1-8b-instruct`.
 
@@ -102,6 +103,7 @@ docker run -p 3000:3000 \
 server.cjs                    Bundled Express server
 teles-agent.cjs               Teles Agent — bot and Mini App integration
 teles-ai-client.cjs           OpenRouter/NVIDIA credential rotation and failover
+teles-invoice.cjs             Payment recording, PDF invoice generation, and Telegram delivery
 public/index.html             Static app entry point
 public/teles-enhancements.js  Avatar picker + AI chat widget
 public/images/                Logo + avatars

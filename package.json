@@ -1,7 +1,7 @@
 {
   "name": "teles-ai",
   "version": "1.0.0",
-  "description": "TELES ADS – Telegram Mini App SaaS for Forex/Crypto/Binary channel growth",
+  "description": "TELES ADS - Telegram Mini App SaaS for Forex/Crypto/Binary channel growth",
   "type": "module",
   "scripts": {
     "start": "node server.cjs",
@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "pdfkit": "^0.17.2",
     "pg": "^8.13.3"
   },
   "engines": {
