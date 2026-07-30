@@ -29,6 +29,7 @@ APP_URL=https://egatusad.com node setup-webhook.js
 | `ADMIN_TELEGRAM_ID` | Optional | Telegram user ID for admin access. Defaults to `7049127887`. |
 | `APP_URL` | Optional | Public app URL. Defaults to `https://egatusad.com`. |
 | `AUTO_SETUP_WEBHOOK` | Optional | Keeps the Telegram webhook pointed at `APP_URL` on startup. Set to `false` only when managed externally. |
+| `AGENT_MONITOR_INTERVAL_MS` | Optional | Campaign milestone polling interval. Defaults to 15 minutes and has a 60-second minimum. |
 
 ## Teles Agent 🤖
 
@@ -36,6 +37,10 @@ The built-in AI assistant. It knows the platform, live package pricing from the 
 
 - **In the bot:** any plain message in a private chat gets an AI reply. Also `/agent`, `/ask <question>`, `/clear`.
 - **In the Mini App:** the floating TELES AI logo opens the chat widget (API: `POST /api/agent/chat`).
+- **Persistent memory:** bot conversations survive app restarts when PostgreSQL is configured; `/clear` removes saved memory.
+- **Channel intelligence:** `/copy <public channel>` samples public posts, estimates view rate and budget, and creates a reviewable campaign brief. Metrics are explicitly presented as estimates.
+- **Campaign operations:** `/health` scores active campaign delivery, while the background monitor sends deduplicated 25/50/75/100% milestone updates.
+- **Human handoff:** `/human` creates a support ticket containing the user's request.
 - **Free models with automatic fallback:** if one model is rate-limited, the next one answers. Default chain:
   1. `openrouter/free`
   2. `nvidia/nemotron-3-ultra-550b-a55b:free`
@@ -64,6 +69,9 @@ User commands:
 - `/start` - Open the TELES ADS platform.
 - `/agent` - Chat with Teles Agent AI.
 - `/ask <question>` - Quick one-shot AI answer.
+- `/copy <channel>` - Analyze a public Telegram channel and build a campaign brief.
+- `/health` - Check the health of active campaigns.
+- `/human [reason]` - Create a human-support handoff.
 - `/clear` - Reset your AI conversation.
 - `/status` - Check campaign status.
 - `/packages` - View advertising packages.
@@ -75,6 +83,7 @@ Admin commands:
 - `/teles` - Open admin panel.
 - `/broadcast <message>` - Send a message to all users.
 - `/stats` - Platform statistics (users, campaigns, revenue).
+- `/copilot` - Show prioritized campaign, lead, and support operations.
 
 ## Docker
 

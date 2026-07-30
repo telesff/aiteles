@@ -28,3 +28,9 @@ test("production platform links point to egatusad.com", () => {
   assert.doesNotMatch(server, /Visit telesads\.com/);
   assert.match(frontend, /value:"egatusad\.com",href:"https:\/\/egatusad\.com"/);
 });
+
+test("production Telegram routing forwards callback queries", () => {
+  assert.match(server, /r\?\.callback_query\?\.message\?\.chat\?\.id/);
+  assert.match(server, /r\?\.callback_query\?\.from\?\.id/);
+  assert.match(server, /allowed_updates:\["message","callback_query"\]/);
+});

@@ -19,6 +19,10 @@ const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
 const APP_URL = process.env.APP_URL || "https://egatusad.com";
 const AGENCY_TG = "https://t.me/TelesAds";
+const LOGO_URL = `${APP_URL.replace(/\/$/, "")}/images/logo.jpg`;
+const intelligence = require("./teles-intelligence.cjs");
+const persistentStore = require("./teles-store.cjs");
+const flows = new Map();
 
 /**
  * Convert a package label into an exact campaign member target.
@@ -57,7 +61,7 @@ async function ensureTelegramWebhook() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url: webhookUrl,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
       drop_pending_updates: false,
     }),
   });
@@ -93,6 +97,7 @@ const HISTORY_LIMIT = 16; // max messages kept per chat
 const MEMORY_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const MAX_CHATS = 500;
 const conversations = new Map(); // chatId -> { messages: [], touched: ts }
+const hydratedChats = new Set();
 
 function getHistory(chatId) {
   const entry = conversations.get(chatId);
@@ -131,6 +136,28 @@ function pushHistory(chatId, role, content) {
 
 function clearHistory(chatId) {
   conversations.delete(chatId);
+  hydratedChats.delete(String(chatId));
+}
+
+async function hydrateHistory(chatId) {
+  const key = String(chatId);
+  if (hydratedChats.has(key) || conversations.has(chatId)) return;
+  hydratedChats.add(key);
+  try {
+    const messages = (await persistentStore.loadConversation(chatId))
+      .filter(
+        (message) =>
+          message &&
+          (message.role === "user" || message.role === "assistant") &&
+          typeof message.content === "string"
+      )
+      .slice(-HISTORY_LIMIT);
+    if (messages.length) {
+      conversations.set(chatId, { messages, touched: Date.now() });
+    }
+  } catch (error) {
+    console.error("Teles Agent: failed to hydrate memory:", error.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +305,7 @@ async function callOpenRouter(messages) {
 }
 
 async function generateReply(chatId, userText, deps) {
+  await hydrateHistory(chatId);
   const messages = [
     { role: "system", content: await systemPrompt(deps) },
     ...getHistory(chatId),
@@ -287,6 +315,9 @@ async function generateReply(chatId, userText, deps) {
   if (result.ok) {
     pushHistory(chatId, "user", userText);
     pushHistory(chatId, "assistant", result.text);
+    await persistentStore
+      .saveConversation(chatId, deps?.userId, getHistory(chatId))
+      .catch((error) => console.error("Teles Agent: failed to save memory:", error.message));
   }
   return result;
 }
@@ -311,7 +342,7 @@ function mdToTelegramHtml(text) {
 }
 
 async function tgSend(chatId, html, replyMarkup) {
-  if (!BOT_TOKEN) return;
+  if (!BOT_TOKEN) return null;
   // Telegram hard limit is 4096 chars — chunk long replies.
   const chunks = [];
   let rest = html;
@@ -322,6 +353,7 @@ async function tgSend(chatId, html, replyMarkup) {
     rest = rest.slice(cut);
   }
   chunks.push(rest);
+  let lastMessage = null;
   for (let i = 0; i < chunks.length; i++) {
     const payload = {
       chat_id: chatId,
@@ -336,19 +368,79 @@ async function tgSend(chatId, html, replyMarkup) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         // HTML parse failure fallback: resend as plain text
         payload.text = chunks[i].replace(/<[^>]+>/g, "");
         delete payload.parse_mode;
-        await fetch(`${TG_API}/sendMessage`, {
+        const fallback = await fetch(`${TG_API}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         }).catch(() => {});
+        const fallbackBody = await fallback?.json().catch(() => ({}));
+        lastMessage = fallbackBody?.result || lastMessage;
+      } else {
+        lastMessage = body.result || lastMessage;
       }
     } catch (err) {
       console.error("Teles Agent: sendMessage failed:", err.message);
     }
+  }
+  return lastMessage;
+}
+
+async function tgEdit(chatId, messageId, html, replyMarkup) {
+  if (!BOT_TOKEN || !messageId) return null;
+  const payload = {
+    chat_id: chatId,
+    message_id: messageId,
+    text: html,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: replyMarkup || { inline_keyboard: [] },
+  };
+  try {
+    const response = await fetch(`${TG_API}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json().catch(() => ({}));
+    return body.result || null;
+  } catch (error) {
+    console.error("Teles Agent: editMessageText failed:", error.message);
+    return null;
+  }
+}
+
+async function tgAnswerCallback(callbackQueryId, text = "") {
+  if (!BOT_TOKEN || !callbackQueryId) return;
+  await fetch(`${TG_API}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+  }).catch(() => {});
+}
+
+async function tgSendPhoto(chatId, caption, replyMarkup) {
+  if (!BOT_TOKEN) return null;
+  try {
+    const response = await fetch(`${TG_API}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        photo: LOGO_URL,
+        caption,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup,
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    return response.ok ? body.result : null;
+  } catch {
+    return null;
   }
 }
 
@@ -361,6 +453,222 @@ async function tgTyping(chatId) {
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
     });
   } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Autonomous growth workflows
+// ---------------------------------------------------------------------------
+const FLOW_TTL_MS = 15 * 60 * 1000;
+
+function setFlow(chatId, kind) {
+  flows.set(String(chatId), { kind, createdAt: Date.now() });
+}
+
+function takeFlow(chatId) {
+  const key = String(chatId);
+  const flow = flows.get(key);
+  if (!flow) return null;
+  flows.delete(key);
+  return Date.now() - flow.createdAt <= FLOW_TTL_MS ? flow : null;
+}
+
+function telegramUsername(update) {
+  return update?.message?.from?.username || update?.callback_query?.from?.username || null;
+}
+
+async function livePackages(ctx) {
+  try {
+    if (ctx?.db && ctx?.packages) {
+      return (await ctx.db.select().from(ctx.packages)).filter((item) => item.active !== false);
+    }
+  } catch (error) {
+    console.error("Teles Agent: failed to load package rates:", error.message);
+  }
+  return [];
+}
+
+function copyAnalysis(channel) {
+  const viewRate = channel.estimatedViewRate;
+  const visibility =
+    viewRate === null ? "unverified" : viewRate >= 35 ? "strong" : viewRate >= 15 ? "healthy" : "low";
+  const cadence =
+    channel.postsLast7d >= 14 ? "high" : channel.postsLast7d >= 5 ? "consistent" : "light";
+  return {
+    visibility,
+    cadence,
+    recommendation:
+      visibility === "low"
+        ? "Improve the channel bio, pinned offer, and content engagement before scaling traffic."
+        : "Use the audience profile as a benchmark, then test a focused campaign without copying branding or content.",
+  };
+}
+
+function formatMetric(value, suffix = "") {
+  return value === null || value === undefined
+    ? "Not available"
+    : `${Number(value).toLocaleString()}${suffix}`;
+}
+
+async function runCopyAnalysis(ctx, target) {
+  const { chatId, userId, update } = ctx;
+  await tgTyping(chatId);
+  const pending = await tgSend(chatId, "Analyzing the public channel and recent posts...");
+  try {
+    const channel = await intelligence.fetchChannelIntelligence(target, { botToken: BOT_TOKEN });
+    const growth = await persistentStore.saveChannelSnapshot(channel);
+    const budget = intelligence.estimateCopyBudget(channel.subscriberCount, await livePackages(ctx));
+    const analysis = copyAnalysis(channel);
+    const request = await persistentStore.createCopyRequest({
+      telegramId: userId,
+      username: telegramUsername(update),
+      channel,
+      growth,
+      budget,
+      analysis,
+    });
+    const growthText = growth
+      ? `${growth.change >= 0 ? "+" : ""}${growth.change.toLocaleString()} since the last scan (${growth.dailyChange >= 0 ? "+" : ""}${growth.dailyChange.toLocaleString()}/day)`
+      : "First scan - growth trend will appear next time";
+    const html = `<b>Channel intelligence: ${escapeHtml(channel.title)}</b>\n\n` +
+      `Channel: @${escapeHtml(channel.handle)}\n` +
+      `Subscribers: <b>${formatMetric(channel.subscriberCount)}</b>\n` +
+      `Average views: <b>${formatMetric(channel.avgViews)}</b> (${channel.postsSampled} posts sampled)\n` +
+      `Estimated view rate: <b>${formatMetric(channel.estimatedViewRate, "%")}</b>\n` +
+      `Estimated CTR proxy: <b>${formatMetric(channel.estimatedCtrProxy, "%")}</b>\n` +
+      `Posts in 7 days: <b>${formatMetric(channel.postsLast7d)}</b>\n` +
+      `Subscriber trend: ${escapeHtml(growthText)}\n\n` +
+      `<b>Campaign model</b>\n` +
+      `Suggested target: <b>${formatMetric(budget.suggestedTarget)} members</b>\n` +
+      `Estimated budget: <b>$${formatMetric(budget.estimatedBudget)}</b>\n` +
+      `Minimum managed budget: <b>$${formatMetric(budget.minimumBudget)}</b>\n\n` +
+      `<b>Agent assessment:</b> ${escapeHtml(analysis.visibility)} visibility, ${escapeHtml(analysis.cadence)} posting cadence.\n` +
+      `${escapeHtml(analysis.recommendation)}\n\n` +
+      `<i>Public-data estimates are directional, not guaranteed results.</i>`;
+    const keyboard = request?.id
+      ? {
+          inline_keyboard: [
+            [{ text: "Build this campaign", callback_data: `copy_submit:${request.id}` }],
+            [{ text: "Cancel", callback_data: `copy_cancel:${request.id}` }],
+          ],
+        }
+      : { inline_keyboard: [[{ text: "Open campaign builder", web_app: { url: APP_URL } }]] };
+    if (pending?.message_id) await tgEdit(chatId, pending.message_id, html, keyboard);
+    else await tgSend(chatId, html, keyboard);
+  } catch (error) {
+    const message = `Could not analyze that channel: ${escapeHtml(error.message)}\n\nOnly public Telegram channels can be analyzed.`;
+    if (pending?.message_id) await tgEdit(chatId, pending.message_id, message);
+    else await tgSend(chatId, message);
+  }
+}
+
+async function handleCallback(ctx) {
+  const callback = ctx.update?.callback_query;
+  if (!callback?.data) return false;
+  const match = callback.data.match(/^copy_(submit|cancel):(\d+)$/);
+  if (!match) return false;
+  const request = await persistentStore.getCopyRequest(Number(match[2]));
+  if (!request || Number(request.telegram_id) !== Number(ctx.userId)) {
+    await tgAnswerCallback(callback.id, "This campaign request is unavailable.");
+    return true;
+  }
+  await tgAnswerCallback(callback.id);
+  const status = match[1] === "submit" ? "submitted" : "cancelled";
+  await persistentStore.setCopyRequestStatus(request.id, status);
+  const html = status === "submitted"
+    ? `<b>Campaign brief saved</b>\n\nThe analysis for @${escapeHtml(request.target_handle)} is ready. Open TELES ADS to review the audience and complete your order.`
+    : `<b>Campaign request cancelled</b>\n\nNo campaign was ordered and no charge was made.`;
+  const keyboard = status === "submitted"
+    ? { inline_keyboard: [[{ text: "Open TELES ADS", web_app: { url: APP_URL } }]] }
+    : { inline_keyboard: [] };
+  await tgEdit(ctx.chatId, callback.message?.message_id, html, keyboard);
+  return true;
+}
+
+async function createHandoff(ctx, description) {
+  const ticket = await persistentStore.createHumanTicket(
+    ctx.userId,
+    telegramUsername(ctx.update),
+    description.slice(0, 2000)
+  );
+  await tgSend(
+    ctx.chatId,
+    `<b>Human support requested</b>\n\nTicket: <code>${escapeHtml(ticket.ticket_number)}</code>\nA TELES ADS specialist can now review your request. You can also contact ${AGENCY_TG}.`
+  );
+}
+
+async function sendCampaignHealth(ctx) {
+  const campaigns = await persistentStore.listActiveCampaigns(ctx.userId);
+  if (!campaigns.length) {
+    await tgSend(ctx.chatId, "No active campaigns were found for this Telegram account.");
+    return;
+  }
+  const lines = campaigns.slice(0, 5).map((campaign) => {
+    const health = intelligence.calculateCampaignHealth({
+      status: campaign.status,
+      membersTarget: campaign.members_target,
+      membersDelivered: campaign.members_delivered,
+      createdAt: campaign.created_at,
+    });
+    return `<b>${escapeHtml(campaign.package_name)}</b> - ${health.progress}% delivered, health ${health.score}/100 (${health.status})`;
+  });
+  await tgSend(ctx.chatId, `<b>Campaign health</b>\n\n${lines.join("\n")}`, {
+    inline_keyboard: [[{ text: "Open live reports", web_app: { url: APP_URL } }]],
+  });
+}
+
+async function sendAdminCopilot(ctx) {
+  const stats = await persistentStore.adminCopilotStats();
+  const pending = Number(stats.pending_campaigns || 0);
+  const tickets = Number(stats.open_tickets || 0);
+  const priority = tickets
+    ? `Resolve ${tickets} open support ticket${tickets === 1 ? "" : "s"}.`
+    : pending
+      ? `Review ${pending} pending campaign${pending === 1 ? "" : "s"}.`
+      : "No urgent queue items detected.";
+  await tgSend(
+    ctx.chatId,
+    `<b>Admin copilot</b>\n\nUsers: <b>${formatMetric(stats.users || 0)}</b>\n` +
+      `Active campaigns: <b>${formatMetric(stats.active_campaigns || 0)}</b>\n` +
+      `Pending campaigns: <b>${formatMetric(pending)}</b>\n` +
+      `Open tickets: <b>${formatMetric(tickets)}</b>\n` +
+      `Copy-campaign leads: <b>${formatMetric(stats.copy_leads || 0)}</b>\n` +
+      `Campaign value: <b>$${formatMetric(stats.campaign_value || 0)}</b>\n\n` +
+      `<b>Next action:</b> ${escapeHtml(priority)}`
+  );
+}
+
+async function monitorCampaigns() {
+  if (!BOT_TOKEN || !process.env.DATABASE_URL) return;
+  try {
+    for (const campaign of await persistentStore.listActiveCampaigns()) {
+      const target = Number(campaign.members_target) || 0;
+      if (!target) continue;
+      const progress = Math.min(100, (Number(campaign.members_delivered || 0) / target) * 100);
+      let newest = null;
+      for (const milestone of [25, 50, 75, 100]) {
+        if (progress >= milestone && await persistentStore.markCampaignAlert(campaign.id, String(milestone))) {
+          newest = milestone;
+        }
+      }
+      if (newest !== null) {
+        await tgSend(
+          campaign.telegram_id,
+          `<b>Campaign update</b>\n\n${escapeHtml(campaign.package_name)} reached <b>${newest}%</b> of its ${formatMetric(target)}-member target.`
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Teles Agent: campaign monitor failed:", error.message);
+  }
+}
+
+let campaignMonitor = null;
+function startCampaignMonitor() {
+  if (campaignMonitor || !BOT_TOKEN || !process.env.DATABASE_URL) return;
+  const intervalMs = Math.max(60_000, Number(process.env.AGENT_MONITOR_INTERVAL_MS) || 15 * 60_000);
+  campaignMonitor = setInterval(monitorCampaigns, intervalMs);
+  campaignMonitor.unref?.();
+  setTimeout(monitorCampaigns, 10_000).unref?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +701,14 @@ function helpText(isAdmin) {
 📖 /help — This list
 
 💬 <b>Tip:</b> in this private chat, any plain message is answered by Teles Agent AI.`;
+  t += `
+
+<b>Agent workflows</b>
+/copy &lt;channel&gt; - Analyze a public competitor channel
+/health - Check active campaign health
+/human - Hand off to a human specialist`;
   if (isAdmin) {
+    t += "\n/copilot - Prioritized business overview";
     t += `
 
 🔐 <b>Admin</b>
@@ -414,7 +729,12 @@ function helpText(isAdmin) {
 async function handleUpdate(ctx) {
   try {
     let { text, chatId, userId, update } = ctx;
-    if (!chatId || !text) return false;
+    const callback = update?.callback_query;
+    chatId = chatId || callback?.message?.chat?.id;
+    userId = userId || callback?.from?.id;
+    if (!chatId) return false;
+    if (callback) return handleCallback({ ...ctx, chatId, userId, update });
+    if (!text) return false;
     // Normalize "/cmd@BotName args" -> "/cmd args" (Telegram group syntax)
     if (text.startsWith("/")) text = text.replace(/^(\/[a-zA-Z0-9_]+)@\S+/, "$1");
     if (text === "/start" || text.startsWith("/start ")) return false;
@@ -426,6 +746,16 @@ async function handleUpdate(ctx) {
       campaigns: ctx.campaigns,
       userId,
     };
+
+    const flow = !text.startsWith("/") ? takeFlow(chatId) : null;
+    if (flow?.kind === "copy_link") {
+      await runCopyAnalysis({ ...ctx, chatId, userId, update }, text);
+      return true;
+    }
+    if (flow?.kind === "human_reason") {
+      await createHandoff({ ...ctx, chatId, userId, update }, text);
+      return true;
+    }
 
     // ---- /agent -------------------------------------------------------
     if (text === "/agent") {
@@ -451,9 +781,42 @@ async function handleUpdate(ctx) {
       return true;
     }
 
+    // ---- /copy [public channel] --------------------------------------
+    if (text === "/copy" || text.startsWith("/copy ") || text === "/analyze" || text.startsWith("/analyze ")) {
+      const target = text.replace(/^\/(?:copy|analyze)\s*/, "").trim();
+      if (!target) {
+        setFlow(chatId, "copy_link");
+        await tgSend(chatId, "Send the public Telegram channel link or @username you want to analyze.");
+      } else {
+        await runCopyAnalysis({ ...ctx, chatId, userId, update }, target);
+      }
+      return true;
+    }
+
+    // ---- /human [reason] ---------------------------------------------
+    if (text === "/human" || text.startsWith("/human ")) {
+      const reason = text.replace(/^\/human\s*/, "").trim();
+      if (!reason) {
+        setFlow(chatId, "human_reason");
+        await tgSend(chatId, "Briefly describe what you need help with, and I will create a support handoff.");
+      } else {
+        await createHandoff({ ...ctx, chatId, userId, update }, reason);
+      }
+      return true;
+    }
+
+    // ---- /health -----------------------------------------------------
+    if (text === "/health") {
+      await sendCampaignHealth({ ...ctx, chatId, userId, update });
+      return true;
+    }
+
     // ---- /clear ---------------------------------------------------------
     if (text === "/clear") {
       clearHistory(chatId);
+      await persistentStore
+        .deleteConversation(chatId)
+        .catch((error) => console.error("Teles Agent: failed to clear saved memory:", error.message));
       await tgSend(chatId, "🧹 Conversation cleared! Teles Agent has a fresh memory now.");
       return true;
     }
@@ -504,6 +867,15 @@ async function handleUpdate(ctx) {
     }
 
     // ---- Plain text in private chat → AI reply ---------------------------
+    if (text === "/copilot") {
+      if (!isAdmin) {
+        await tgSend(chatId, "This command is restricted to admins only.");
+      } else {
+        await sendAdminCopilot({ ...ctx, chatId, userId, update });
+      }
+      return true;
+    }
+
     if (isPrivate && !text.startsWith("/")) {
       await tgTyping(chatId);
       const r = await generateReply(chatId, text, deps);
@@ -583,4 +955,12 @@ async function apiChat(req, res, deps) {
   }
 }
 
-module.exports = { handleUpdate, apiChat, parseMemberTarget };
+startCampaignMonitor();
+
+module.exports = {
+  apiChat,
+  handleUpdate,
+  monitorCampaigns,
+  parseMemberTarget,
+  startCampaignMonitor,
+};

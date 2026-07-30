@@ -58,6 +58,30 @@ replaceExpected(
 
 replaceExpected(
   "server.cjs",
+  'let r=t.body,i=r?.message?.text?.trim()||"",n=r?.message?.chat?.id,a=r?.message?.from?.id;if(!n)',
+  'let r=t.body,i=r?.message?.text?.trim()||"",n=r?.message?.chat?.id||r?.callback_query?.message?.chat?.id,a=r?.message?.from?.id||r?.callback_query?.from?.id;if(!n)'
+);
+
+replaceExpected(
+  "server.cjs",
+  'body:JSON.stringify({url:r,allowed_updates:["message"]})',
+  'body:JSON.stringify({url:r,allowed_updates:["message","callback_query"]})'
+);
+
+replaceExpected(
+  "server.cjs",
+  '{command:"ask",description:"Ask Teles Agent a quick question"},{command:"status"',
+  '{command:"ask",description:"Ask Teles Agent a quick question"},{command:"copy",description:"Analyze a public channel"},{command:"health",description:"Check campaign health"},{command:"human",description:"Request human support"},{command:"status"'
+);
+
+replaceExpected(
+  "server.cjs",
+  '{command:"start",description:"Welcome & open the platform"},{command:"status",description:"Check your campaign status"},{command:"packages"',
+  '{command:"start",description:"Welcome & open the platform"},{command:"agent",description:"Chat with Teles Agent AI"},{command:"copy",description:"Analyze a public channel"},{command:"health",description:"Check campaign health"},{command:"human",description:"Request human support"},{command:"status",description:"Check your campaign status"},{command:"packages"'
+);
+
+replaceExpected(
+  "server.cjs",
   'Te.post("/admin/packages",async(t,e)=>{let{name:r,description:i,members:n,features:a,price:o,originalPrice:s,popular:u}=t.body,[c]=await P.insert',
   'Te.post("/admin/packages",async(t,e)=>{let{name:r,description:i,members:n,features:a,price:o,originalPrice:s,popular:u}=t.body;if(!__telesAgent.parseMemberTarget(n)){e.status(400).json({error:"A valid member target is required."});return}let[c]=await P.insert'
 );

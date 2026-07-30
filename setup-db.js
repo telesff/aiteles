@@ -75,6 +75,56 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS telegram_id BIGINT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS telegram_username TEXT;
+
+CREATE TABLE IF NOT EXISTS agent_conversations (
+  chat_id TEXT PRIMARY KEY,
+  telegram_id BIGINT,
+  messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS channel_intelligence_snapshots (
+  id SERIAL PRIMARY KEY,
+  handle TEXT NOT NULL,
+  subscribers INTEGER NOT NULL,
+  avg_views INTEGER,
+  estimated_view_rate REAL,
+  posts_last_7d INTEGER,
+  captured_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS channel_intelligence_handle_date_idx
+  ON channel_intelligence_snapshots (handle, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS copy_campaign_requests (
+  id SERIAL PRIMARY KEY,
+  telegram_id BIGINT NOT NULL,
+  username TEXT,
+  target_handle TEXT NOT NULL,
+  target_title TEXT NOT NULL,
+  subscribers INTEGER NOT NULL,
+  avg_views INTEGER,
+  estimated_view_rate REAL,
+  estimated_ctr_proxy REAL,
+  subscriber_growth JSONB,
+  minimum_budget REAL NOT NULL DEFAULT 789,
+  estimated_budget REAL NOT NULL,
+  suggested_target INTEGER NOT NULL,
+  analysis JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'analyzed',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_campaign_alerts (
+  campaign_id INTEGER NOT NULL,
+  milestone TEXT NOT NULL,
+  sent_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (campaign_id, milestone)
+);
+
 CREATE TABLE IF NOT EXISTS invoices (
   id SERIAL PRIMARY KEY,
   invoice_number TEXT NOT NULL,
