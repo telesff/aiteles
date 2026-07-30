@@ -7,7 +7,7 @@
  * Env vars:
  *   OPENROUTER_API_KEY   Required for AI replies (get one free at https://openrouter.ai/keys)
  *   OPENROUTER_MODELS    Optional comma-separated model override list
- *   APP_URL              Public app URL (default https://telesads.com)
+ *   APP_URL              Public app URL (default https://egatusad.com)
  *
  * Exposes:
  *   handleUpdate(ctx)  -> Promise<boolean>  Telegram webhook hook (true = handled)
@@ -17,11 +17,64 @@
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
-const APP_URL = process.env.APP_URL || "https://telesads.com";
+const APP_URL = process.env.APP_URL || "https://egatusad.com";
 const AGENCY_TG = "https://t.me/TelesAds";
+
+/**
+ * Convert a package label into an exact campaign member target.
+ * Existing packages may use values such as "5,000", "2.5k", or "3k–5k Members".
+ * A range uses its upper value as the delivery target.
+ */
+function parseMemberTarget(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+  }
+  if (typeof value !== "string") return null;
+
+  const values = value.match(/\d[\d,.]*(?:\s*[kKmM](?![a-zA-Z]))?/g) || [];
+  const parsed = values
+    .map((token) => {
+      const normalized = token.trim().toLowerCase();
+      const multiplier = normalized.endsWith("k")
+        ? 1_000
+        : normalized.endsWith("m")
+          ? 1_000_000
+          : 1;
+      const numeric = normalized.replace(/[km]$/, "").replace(/,/g, "");
+      const result = Number.parseFloat(numeric) * multiplier;
+      return Number.isFinite(result) && result > 0 ? Math.floor(result) : null;
+    })
+    .filter((target) => target !== null);
+
+  return parsed.length ? Math.max(...parsed) : null;
+}
+
+async function ensureTelegramWebhook() {
+  if (!BOT_TOKEN || process.env.AUTO_SETUP_WEBHOOK === "false") return;
+  const webhookUrl = `${APP_URL.replace(/\/$/, "")}/api/telegram/webhook`;
+  const response = await fetch(`${TG_API}/setWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: webhookUrl,
+      allowed_updates: ["message"],
+      drop_pending_updates: false,
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.ok) {
+    throw new Error(body.description || `Telegram returned HTTP ${response.status}`);
+  }
+  console.log(`Teles Agent: Telegram webhook ready at ${webhookUrl}`);
+}
+
+ensureTelegramWebhook().catch((error) => {
+  console.error("Teles Agent: webhook setup failed:", error.message);
+});
 
 // Fallback chain of OpenRouter FREE models — first one that answers wins.
 const DEFAULT_MODELS = [
+  "openrouter/free",
   "nvidia/nemotron-3-ultra-550b-a55b:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
   "google/gemma-4-31b-it:free",
@@ -98,7 +151,8 @@ async function packagesSummary(deps) {
             .map((p) => {
               let feats = [];
               try { feats = JSON.parse(p.features || "[]"); } catch {}
-              return `- ${p.name}: $${p.price}${p.originalPrice ? ` (was $${p.originalPrice})` : ""}${p.members ? `, ${p.members} members` : ""}${p.popular ? " [MOST POPULAR]" : ""}${feats.length ? `. Includes: ${feats.join(", ")}` : ""}`;
+              const target = parseMemberTarget(p.members);
+              return `- ${p.name}: $${p.price}${p.originalPrice ? ` (was $${p.originalPrice})` : ""}${target ? `, target ${target.toLocaleString()} members` : p.members ? `, ${p.members}` : ""}${p.popular ? " [MOST POPULAR]" : ""}${feats.length ? `. Includes: ${feats.join(", ")}` : ""}`;
             })
             .join("\n"),
         };
@@ -111,14 +165,47 @@ async function packagesSummary(deps) {
   return pkgCache.text || "- Best Package: $199\n- Recommended Package: $359 [MOST POPULAR]\n- Luxury Package: $599";
 }
 
+async function campaignsSummary(deps) {
+  if (!deps?.db || !deps?.campaigns || !deps?.userId) {
+    return "No signed-in campaign context is available.";
+  }
+  try {
+    const rows = await deps.db.select().from(deps.campaigns);
+    const own = rows
+      .filter((campaign) => Number(campaign.telegramId) === Number(deps.userId))
+      .slice(-5);
+    if (!own.length) return "This user has no campaigns yet.";
+    return own
+      .map(
+        (campaign) =>
+          `- ${campaign.packageName}: ${campaign.status}; ${Number(campaign.membersDelivered || 0).toLocaleString()} / ${Number(campaign.membersTarget || 0).toLocaleString()} members delivered for ${campaign.channelLink}`
+      )
+      .join("\n");
+  } catch (error) {
+    console.error("Teles Agent: failed to load campaign context:", error.message);
+    return "Campaign context is temporarily unavailable.";
+  }
+}
+
 async function systemPrompt(deps) {
   const pkgs = await packagesSummary(deps);
-  return `You are Teles Agent, the official AI assistant of TELES ADS (${APP_URL}) — a Telegram advertising agency that grows Forex, Crypto, and Binary trading Telegram channels with real, targeted members.
+  const campaignContext = await campaignsSummary(deps);
+  return `You are Teles Agent, the official AI growth strategist of TELES ADS (${APP_URL}) — a Telegram advertising agency that grows Forex, Crypto, and Binary trading Telegram channels with real, targeted members.
 
 WHAT TELES ADS OFFERS:
 ${pkgs}
 
 PLATFORM FEATURES: targeted ad campaigns across premium trading channels, real-time analytics dashboard, campaign progress tracking, referral rewards, support tickets, VIP status for top clients.
+
+CURRENT USER CAMPAIGNS:
+${campaignContext}
+
+AGENT POWERS:
+- Package strategist: recommend the best package from live package data and explain who it fits.
+- Campaign auditor: identify weak channel bio, pinned post, offer clarity, trust signals, and conversion risks.
+- Growth planner: give a simple 3-step action plan before the user spends.
+- Report explainer: translate delivery, member target, reach, clicks, and conversion into plain English.
+- Compliance guard: avoid guaranteed profit, risk-free claims, fake urgency, and unsafe financial promises.
 
 HOW TO BUY: users open the Mini App (${APP_URL}), pick a package, submit their channel link, and the campaign starts after review. Support: ${AGENCY_TG} or /support.
 
@@ -128,6 +215,11 @@ YOUR STYLE:
 - You may use simple formatting: **bold**, bullet lists.
 - Help with: choosing packages, channel growth strategy, marketing advice for trading channels, platform questions, general questions.
 - If asked about prices or packages, use the exact package data above.
+- When signed-in campaign data is available, use it to explain progress and reports. Never expose another user's campaign.
+- Ask one short clarifying question when channel size, niche, or goal is required for a useful recommendation.
+- End strategy answers with a concrete next action inside TELES ADS.
+- If the user asks what to improve, give direct practical steps: channel positioning, content cadence, trust proof, pinned post, and package fit.
+- If the user asks for a campaign report, explain that reports use the selected package member target and not a generic default.
 - If a user wants to purchase or has a billing problem, direct them to the Mini App or ${AGENCY_TG}.
 - Never invent features TELES ADS does not have. Never promise specific results or guaranteed profits.
 - Politely refuse anything illegal or harmful.`;
@@ -297,7 +389,7 @@ function helpText(isAdmin) {
 📊 /status — Your campaign status
 📦 /packages — View advertising packages
 🎫 /support — Help &amp; support center
-🌐 /website — Visit telesads.com
+🌐 /website — Visit egatusad.com
 📖 /help — This list
 
 💬 <b>Tip:</b> in this private chat, any plain message is answered by Teles Agent AI.`;
@@ -325,9 +417,15 @@ async function handleUpdate(ctx) {
     if (!chatId || !text) return false;
     // Normalize "/cmd@BotName args" -> "/cmd args" (Telegram group syntax)
     if (text.startsWith("/")) text = text.replace(/^(\/[a-zA-Z0-9_]+)@\S+/, "$1");
+    if (text === "/start" || text.startsWith("/start ")) return false;
     const isPrivate = update?.message?.chat?.type === "private";
     const isAdmin = ctx.adminId !== undefined && userId === ctx.adminId;
-    const deps = { db: ctx.db, packages: ctx.packages };
+    const deps = {
+      db: ctx.db,
+      packages: ctx.packages,
+      campaigns: ctx.campaigns,
+      userId,
+    };
 
     // ---- /agent -------------------------------------------------------
     if (text === "/agent") {
@@ -470,7 +568,10 @@ async function apiChat(req, res, deps) {
           .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }))
       : [];
     const messages = [
-      { role: "system", content: await systemPrompt(deps) },
+      {
+        role: "system",
+        content: await systemPrompt({ ...deps, userId: req.telegramUserId }),
+      },
       ...past,
       { role: "user", content: trimmed },
     ];
@@ -482,4 +583,4 @@ async function apiChat(req, res, deps) {
   }
 }
 
-module.exports = { handleUpdate, apiChat };
+module.exports = { handleUpdate, apiChat, parseMemberTarget };

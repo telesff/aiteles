@@ -1,0 +1,2 @@
+server.cjs whitespace=cr-at-eol
+public/assets/*.js whitespace=cr-at-eol

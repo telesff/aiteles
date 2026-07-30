@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.cjs",
     "setup-db": "node setup-db.js",
-    "setup-webhook": "node setup-webhook.js"
+    "setup-webhook": "node setup-webhook.js",
+    "test": "node --test"
   },
   "dependencies": {
     "pg": "^8.13.3"

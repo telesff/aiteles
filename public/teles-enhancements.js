@@ -197,6 +197,13 @@
   }
 
   var fab, panel, msgsBox, inputEl, sendBtn;
+  var panelHideTimer = null;
+  var quickChips = [
+    "Which package fits me?",
+    "Audit my channel",
+    "Explain my report",
+    "Give me a 3-step growth plan",
+  ];
 
   function buildWidget() {
     // Floating action button
@@ -206,60 +213,111 @@
       "background:linear-gradient(135deg,#1f8fff,#4fb2ff)",
       "box-shadow:0 8px 24px rgba(31,143,255,.45)",
       "display:flex", "align-items:center", "justify-content:center",
-      "font-size:26px", "color:#fff", "transition:transform .15s",
-    ].join(";"), "🤖");
+      "color:#fff", "transition:transform .15s,box-shadow .15s",
+      "overflow:hidden", "padding:0",
+    ].join(";"), '<img src="/images/logo.jpg" alt="Teles Agent" style="width:100%;height:100%;object-fit:cover;display:block">');
+    fab.type = "button";
     fab.title = "Teles Agent — AI Assistant";
+    fab.setAttribute("aria-label", "Open Teles Agent");
+    fab.setAttribute("aria-expanded", "false");
     fab.addEventListener("click", toggleChat);
     document.body.appendChild(fab);
 
     // Chat panel
     panel = el("div", [
       "position:fixed", "right:12px", "bottom:170px", "z-index:99985",
-      "width:min(360px,calc(100vw - 24px))", "height:min(480px,calc(100vh - 220px))",
+      "width:min(380px,calc(100vw - 24px))", "height:min(520px,calc(100dvh - 210px))",
+      "min-height:360px",
       "background:rgba(255,255,255,.94)",
       "backdrop-filter:blur(18px)", "-webkit-backdrop-filter:blur(18px)",
       "border:1px solid rgba(255,255,255,.85)", "border-radius:22px",
       "box-shadow:0 16px 48px rgba(0,0,0,.28)",
       "display:none", "flex-direction:column", "overflow:hidden",
+      "opacity:0", "transform:translateY(12px) scale(.98)",
+      "transition:opacity .18s ease,transform .18s ease",
       "font-family:Inter,system-ui,sans-serif",
     ].join(";"));
+    panel.className = "glass-strong";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Teles Agent chat");
 
     var header = el("div", [
       "padding:14px 16px",
       "background:linear-gradient(135deg,#1f8fff,#4fb2ff)",
       "color:#fff", "display:flex", "align-items:center", "gap:10px",
     ].join(";"),
-      '<div style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-size:18px">🤖</div>' +
+      '<div style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;overflow:hidden"><img src="/images/logo.jpg" alt="Teles Agent" style="width:100%;height:100%;object-fit:cover;display:block"></div>' +
       '<div style="flex:1"><div style="font-weight:700;font-size:14px">Teles Agent</div>' +
-      '<div style="font-size:11px;opacity:.85">AI Growth Assistant • online</div></div>' +
+      '<div style="font-size:11px;opacity:.85">AI Growth Strategist • online</div></div>' +
       '<button id="teles-chat-close" style="border:0;background:rgba(255,255,255,.2);color:#fff;border-radius:10px;width:28px;height:28px;cursor:pointer;font-size:13px">✕</button>'
     );
     panel.appendChild(header);
 
     msgsBox = el("div", [
       "flex:1", "overflow-y:auto", "padding:14px",
+      "scroll-behavior:smooth",
       "display:flex", "flex-direction:column", "gap:10px",
       "background:linear-gradient(180deg,#f4f8fd,#eef4fb)",
     ].join(";"));
     panel.appendChild(msgsBox);
 
+    var chips = el("div", [
+      "display:flex", "gap:8px", "padding:10px 12px 0",
+      "background:rgba(255,255,255,.9)", "overflow-x:auto",
+      "scrollbar-width:none",
+    ].join(";"));
+    quickChips.forEach(function (label) {
+      var chip = el("button", [
+        "border:1px solid rgba(31,143,255,.22)", "background:rgba(31,143,255,.08)",
+        "color:#1e293b", "border-radius:999px", "padding:7px 10px",
+        "font-size:12px", "white-space:nowrap", "cursor:pointer",
+      ].join(";"), label);
+      chip.type = "button";
+      chip.addEventListener("click", function () {
+        inputEl.value = label;
+        sendMessage();
+      });
+      chips.appendChild(chip);
+    });
+    panel.appendChild(chips);
+
     var inputBar = el("div", [
       "display:flex", "gap:8px", "padding:12px",
       "background:rgba(255,255,255,.9)", "border-top:1px solid rgba(0,0,0,.05)",
     ].join(";"));
-    inputEl = el("input", [
+    inputEl = el("textarea", [
       "flex:1", "border:1px solid rgba(0,0,0,.1)", "border-radius:12px",
       "padding:10px 12px", "font-size:14px", "outline:none",
       "font-family:inherit", "background:#fff", "color:#1e293b",
+      "resize:none", "height:42px", "max-height:96px", "line-height:20px",
     ].join(";"));
-    inputEl.placeholder = "Ask Teles Agent anything…";
+    inputEl.className = "glass-input";
+    inputEl.rows = 1;
+    inputEl.placeholder = "Ask for package, growth, or report help...";
     inputEl.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") sendMessage();
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+    inputEl.addEventListener("input", function () {
+      inputEl.style.height = "42px";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 96) + "px";
+    });
+    inputEl.addEventListener("focus", function () {
+      inputEl.style.borderColor = "rgba(31,143,255,.55)";
+      inputEl.style.boxShadow = "0 0 0 3px rgba(31,143,255,.12)";
+    });
+    inputEl.addEventListener("blur", function () {
+      inputEl.style.borderColor = "rgba(0,0,0,.1)";
+      inputEl.style.boxShadow = "none";
     });
     sendBtn = el("button", [
       "border:0", "border-radius:12px", "padding:0 16px", "cursor:pointer",
       "background:#1f8fff", "color:#fff", "font-weight:600", "font-size:14px",
     ].join(";"), "➤");
+    sendBtn.type = "button";
+    sendBtn.setAttribute("aria-label", "Send message");
     sendBtn.addEventListener("click", sendMessage);
     inputBar.appendChild(inputEl);
     inputBar.appendChild(sendBtn);
@@ -276,7 +334,7 @@
     } else {
       addBubble(
         "assistant",
-        "👋 Hey! I'm **Teles Agent**, your AI growth assistant.\n\nAsk me about packages, pricing, or how to grow your trading channel!",
+        "Hey! I'm **Teles Agent**, your AI growth assistant.\n\nI can help choose a package, audit your channel, explain campaign reports, and plan the next growth move.",
         true
       );
     }
@@ -284,12 +342,29 @@
 
   function toggleChat() {
     chatOpen = !chatOpen;
-    panel.style.display = chatOpen ? "flex" : "none";
-    fab.innerHTML = chatOpen ? "✕" : "🤖";
+    clearTimeout(panelHideTimer);
+    fab.innerHTML = chatOpen ? "✕" : '<img src="/images/logo.jpg" alt="Teles Agent" style="width:100%;height:100%;object-fit:cover;display:block">';
+    fab.setAttribute("aria-label", chatOpen ? "Close Teles Agent" : "Open Teles Agent");
+    fab.setAttribute("aria-expanded", String(chatOpen));
     if (chatOpen) {
+      panel.style.display = "flex";
+      requestAnimationFrame(function () {
+        panel.style.opacity = "1";
+        panel.style.transform = "translateY(0) scale(1)";
+      });
       msgsBox.scrollTop = msgsBox.scrollHeight;
       inputEl.focus();
+    } else {
+      panel.style.opacity = "0";
+      panel.style.transform = "translateY(12px) scale(.98)";
+      panelHideTimer = setTimeout(function () {
+        if (!chatOpen) panel.style.display = "none";
+      }, 180);
     }
+    try {
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback)
+        window.Telegram.WebApp.HapticFeedback.impactOccurred("light");
+    } catch (e) {}
   }
 
   function addBubble(role, text, skipHistory) {
@@ -320,10 +395,12 @@
     var text = (inputEl.value || "").trim();
     if (!text || pending) return;
     inputEl.value = "";
+    inputEl.style.height = "42px";
     addBubble("user", text);
     pending = true;
     sendBtn.disabled = true;
     sendBtn.style.opacity = ".5";
+    sendBtn.innerHTML = "...";
 
     var typing = el("div", [
       "align-self:flex-start", "padding:10px 14px", "border-radius:16px",
@@ -335,22 +412,32 @@
 
     fetch("/api/agent/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data":
+          (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || "",
+      },
       body: JSON.stringify({ message: text, history: chatHistory.slice(0, -1).slice(-12) }),
     })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error((data && data.error) || "Request failed");
+          return data;
+        });
+      })
       .then(function (data) {
         typing.remove();
         addBubble("assistant", (data && data.reply) || "Sorry, something went wrong. Try again!");
       })
-      .catch(function () {
+      .catch(function (error) {
         typing.remove();
-        addBubble("assistant", "⚠️ Connection issue — please try again in a moment.");
+        addBubble("assistant", "⚠️ " + (error.message || "Connection issue — please try again in a moment."));
       })
       .finally(function () {
         pending = false;
         sendBtn.disabled = false;
         sendBtn.style.opacity = "1";
+        sendBtn.innerHTML = "➤";
       });
   }
 
@@ -358,6 +445,12 @@
    * Boot
    * ------------------------------------------------------------------- */
   function boot() {
+    try {
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
+    } catch (e) {}
     buildWidget();
     applyAvatar();
     // React SPA — watch for re-renders and route changes
@@ -367,6 +460,9 @@
     mo.observe(document.getElementById("root") || document.body, {
       childList: true,
       subtree: true,
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && chatOpen) toggleChat();
     });
   }
 
