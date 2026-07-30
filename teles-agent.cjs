@@ -5,8 +5,10 @@
  * Free-model AI assistant integrated into the Telegram bot and Mini App.
  *
  * Env vars:
- *   OPENROUTER_API_KEY   Required for AI replies (get one free at https://openrouter.ai/keys)
- *   OPENROUTER_MODELS    Optional comma-separated model override list
+ *   OPENROUTER_API_KEYS  Comma-separated OpenRouter key pool (singular also works)
+ *   NVIDIA_API_KEYS      Comma-separated NVIDIA key pool (singular also works)
+ *   OPENROUTER_MODELS    Optional comma-separated OpenRouter model list
+ *   NVIDIA_MODELS        Optional comma-separated NVIDIA model list
  *   APP_URL              Public app URL (default https://egatusad.com)
  *
  * Exposes:
@@ -16,13 +18,14 @@
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
 const APP_URL = process.env.APP_URL || "https://egatusad.com";
 const AGENCY_TG = "https://t.me/TelesAds";
 const LOGO_URL = `${APP_URL.replace(/\/$/, "")}/images/logo.jpg`;
 const intelligence = require("./teles-intelligence.cjs");
 const persistentStore = require("./teles-store.cjs");
+const { createAiClient } = require("./teles-ai-client.cjs");
 const flows = new Map();
+const aiClient = createAiClient({ appUrl: APP_URL });
 
 /**
  * Convert a package label into an exact campaign member target.
@@ -75,20 +78,6 @@ async function ensureTelegramWebhook() {
 ensureTelegramWebhook().catch((error) => {
   console.error("Teles Agent: webhook setup failed:", error.message);
 });
-
-// Fallback chain of OpenRouter FREE models — first one that answers wins.
-const DEFAULT_MODELS = [
-  "openrouter/free",
-  "nvidia/nemotron-3-ultra-550b-a55b:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
-  "google/gemma-4-31b-it:free",
-  "openai/gpt-oss-20b:free",
-];
-const MODELS = (process.env.OPENROUTER_MODELS || "")
-  .split(",")
-  .map((m) => m.trim())
-  .filter(Boolean);
-const MODEL_CHAIN = MODELS.length ? MODELS : DEFAULT_MODELS;
 
 // ---------------------------------------------------------------------------
 // Conversation memory (per chat, in-process)
@@ -255,53 +244,8 @@ YOUR STYLE:
 // ---------------------------------------------------------------------------
 // OpenRouter call with model fallback
 // ---------------------------------------------------------------------------
-async function callOpenRouter(messages) {
-  if (!OPENROUTER_KEY) {
-    return {
-      ok: false,
-      text: "🤖 Teles Agent is not configured yet. The admin needs to set the OPENROUTER_API_KEY environment variable (free keys at openrouter.ai).",
-    };
-  }
-  let lastErr = "";
-  for (const model of MODEL_CHAIN) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 45000);
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENROUTER_KEY}`,
-          "HTTP-Referer": APP_URL,
-          "X-Title": "Teles Agent",
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          max_tokens: 1024,
-          temperature: 0.7,
-        }),
-      });
-      if (!res.ok) {
-        lastErr = `${model} -> HTTP ${res.status}`;
-        continue; // rate-limited / unavailable — try next model
-      }
-      const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content?.trim();
-      if (text) return { ok: true, text, model };
-      lastErr = `${model} -> empty response`;
-    } catch (err) {
-      lastErr = `${model} -> ${err.name === "AbortError" ? "timeout" : err.message}`;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  console.error("Teles Agent: all models failed:", lastErr);
-  return {
-    ok: false,
-    text: "😔 Teles Agent is a bit overloaded right now. Please try again in a minute!",
-  };
+async function callAiProvider(messages) {
+  return aiClient.complete(messages);
 }
 
 async function generateReply(chatId, userText, deps) {
@@ -311,7 +255,7 @@ async function generateReply(chatId, userText, deps) {
     ...getHistory(chatId),
     { role: "user", content: userText },
   ];
-  const result = await callOpenRouter(messages);
+  const result = await callAiProvider(messages);
   if (result.ok) {
     pushHistory(chatId, "user", userText);
     pushHistory(chatId, "assistant", result.text);
@@ -947,7 +891,7 @@ async function apiChat(req, res, deps) {
       ...past,
       { role: "user", content: trimmed },
     ];
-    const result = await callOpenRouter(messages);
+    const result = await callAiProvider(messages);
     res.json({ reply: result.text, ok: result.ok, agent: "Teles Agent" });
   } catch (err) {
     console.error("Teles Agent apiChat error:", err);

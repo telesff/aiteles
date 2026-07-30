@@ -24,8 +24,11 @@ APP_URL=https://egatusad.com node setup-webhook.js
 | `DATABASE_URL` | Yes | PostgreSQL connection string. On Railway, set this to `${{Postgres.DATABASE_URL}}`. |
 | `TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token from BotFather. |
 | `PORT` | Yes | Port to listen on. Railway sets this automatically. |
-| `OPENROUTER_API_KEY` | For AI | Free API key from [openrouter.ai/keys](https://openrouter.ai/keys). Powers Teles Agent. |
-| `OPENROUTER_MODELS` | Optional | Comma-separated model override list. Defaults to a chain of free models. |
+| `OPENROUTER_API_KEYS` | For AI | Comma-separated OpenRouter key pool. `OPENROUTER_API_KEY` remains supported for one key. |
+| `NVIDIA_API_KEYS` | AI fallback | Comma-separated NVIDIA API key pool. `NVIDIA_API_KEY` remains supported for one key. |
+| `OPENROUTER_MODELS` | Optional | Comma-separated OpenRouter model list distributed across its key pool. |
+| `NVIDIA_MODELS` | Optional | Comma-separated NVIDIA model list. Defaults to `meta/llama-3.3-70b-instruct`. |
+| `AI_REQUEST_TIMEOUT_MS` | Optional | Per-attempt timeout from 3 to 45 seconds. Defaults to 15 seconds. |
 | `ADMIN_TELEGRAM_ID` | Optional | Telegram user ID for admin access. Defaults to `7049127887`. |
 | `APP_URL` | Optional | Public app URL. Defaults to `https://egatusad.com`. |
 | `AUTO_SETUP_WEBHOOK` | Optional | Keeps the Telegram webhook pointed at `APP_URL` on startup. Set to `false` only when managed externally. |
@@ -41,7 +44,7 @@ The built-in AI assistant. It knows the platform, live package pricing from the 
 - **Channel intelligence:** `/copy <public channel>` samples public posts, estimates view rate and budget, and creates a reviewable campaign brief. Metrics are explicitly presented as estimates.
 - **Campaign operations:** `/health` scores active campaign delivery, while the background monitor sends deduplicated 25/50/75/100% milestone updates.
 - **Human handoff:** `/human` creates a support ticket containing the user's request.
-- **Free models with automatic fallback:** if one model is rate-limited, the next one answers. Default chain:
+- **Multi-provider failover:** requests rotate through the OpenRouter key pool. Key-specific failures try another key; an OpenRouter network or server outage switches immediately to NVIDIA. Default OpenRouter chain:
   1. `openrouter/free`
   2. `nvidia/nemotron-3-ultra-550b-a55b:free`
   3. `nvidia/nemotron-3-super-120b-a12b:free`
@@ -92,7 +95,8 @@ docker build -t teles-ai .
 docker run -p 3000:3000 \
   -e DATABASE_URL="postgresql://user:pass@host/db" \
   -e TELEGRAM_BOT_TOKEN="your_bot_token" \
-  -e OPENROUTER_API_KEY="sk-or-v1-..." \
+  -e OPENROUTER_API_KEYS="sk-or-v1-key-one,sk-or-v1-key-two" \
+  -e NVIDIA_API_KEYS="nvapi-key-one,nvapi-key-two" \
   -e PORT=3000 \
   teles-ai
 ```
@@ -101,7 +105,8 @@ docker run -p 3000:3000 \
 
 ```text
 server.cjs                    Bundled Express server
-teles-agent.cjs               Teles Agent — OpenRouter AI module
+teles-agent.cjs               Teles Agent — bot and Mini App integration
+teles-ai-client.cjs           OpenRouter/NVIDIA credential rotation and failover
 public/index.html             Static app entry point
 public/teles-enhancements.js  Avatar picker + AI chat widget
 public/images/                Logo + avatars
