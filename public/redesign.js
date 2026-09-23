@@ -58,6 +58,10 @@
       else removeOrbs(shell);
     }
 
+    // Landing (splash/login) scope marker — lifts the AI FAB off the CTA
+    var p0 = location.pathname.replace(/\/+$/, "") || "/";
+    document.body.classList.toggle("rd-landing", p0 === "/");
+
     // Bottom nav marker + active state
     var nav = document.querySelector("nav");
     if (nav) {
