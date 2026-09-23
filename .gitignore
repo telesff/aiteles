@@ -3,3 +3,8 @@ node_modules/
 *.log
 public/assets/*.map
 .DS_Store
+.vercel
+.env*
+.vercel/
+.env.local
+.env.production
