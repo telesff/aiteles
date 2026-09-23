@@ -135,6 +135,16 @@ async function handleHealth(req, res) {
     requestId: req.id,
     uptimeSec: Math.round(process.uptime()),
   };
+  /* #37 last cron heartbeat + webhook config presence (env only, no secret) */
+  if (p && dbOk) {
+    try {
+      const cr = await p.query("SELECT last_run_at FROM cron_state WHERE key=$1", ["main"]);
+      payload.cron = { lastRun: cr.rows[0] ? cr.rows[0].last_run_at : null };
+    } catch (_) {
+      payload.cron = null;
+    }
+  }
+  payload.webhook = { secretConfigured: !!process.env.WEBHOOK_SECRET };
   res.status(dbOk ? 200 : 503).json(payload);
 }
 
