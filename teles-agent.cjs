@@ -9,7 +9,7 @@
  *   NVIDIA_API_KEYS      Comma-separated NVIDIA key pool (singular also works)
  *   OPENROUTER_MODELS    Optional comma-separated OpenRouter model list
  *   NVIDIA_MODELS        Optional comma-separated NVIDIA model list
- *   APP_URL              Public app URL (default https://egatusad.com)
+ *   APP_URL              Public app URL (default https://aiteles-gamma.vercel.app)
  *
  * Exposes:
  *   handleUpdate(ctx)  -> Promise<boolean>  Telegram webhook hook (true = handled)
@@ -18,7 +18,7 @@
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APP_URL = process.env.APP_URL || "https://egatusad.com";
+const APP_URL = process.env.APP_URL || "https://aiteles-gamma.vercel.app";
 const AGENCY_TG = "https://t.me/TelesAds";
 const LOGO_URL = `${APP_URL.replace(/\/$/, "")}/images/logo.jpg`;
 const intelligence = require("./teles-intelligence.cjs");
@@ -641,7 +641,7 @@ function helpText(isAdmin) {
 📊 /status — Your campaign status
 📦 /packages — View advertising packages
 🎫 /support — Help &amp; support center
-🌐 /website — Visit egatusad.com
+🌐 /website — Visit aiteles-gamma.vercel.app
 📖 /help — This list
 
 💬 <b>Tip:</b> in this private chat, any plain message is answered by Teles Agent AI.`;

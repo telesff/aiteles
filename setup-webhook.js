@@ -12,7 +12,7 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 if (!APP_URL) {
-  console.error("❌ APP_URL is not set. Example: https://egatusad.com");
+  console.error("❌ APP_URL is not set. Example: https://aiteles-gamma.vercel.app");
   process.exit(1);
 }
 

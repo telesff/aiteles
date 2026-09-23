@@ -23,10 +23,10 @@ test("production campaign orders use their package member target", () => {
   assert.match(frontend, /Member target \(e\.g\. 5000 or 3k–5k\)/);
 });
 
-test("production platform links point to egatusad.com", () => {
-  assert.match(server, /process\.env\.APP_URL\|\|"https:\/\/egatusad\.com"/);
+test("production platform links point to aiteles-gamma.vercel.app", () => {
+  assert.match(server, /process\.env\.APP_URL\|\|"https:\/\/aiteles-gamma.vercel.app"/);
   assert.doesNotMatch(server, /Visit telesads\.com/);
-  assert.match(frontend, /value:"egatusad\.com",href:"https:\/\/egatusad\.com"/);
+  assert.match(frontend, /value:"aiteles-gamma.vercel.app",href:"https:\/\/aiteles-gamma.vercel.app"/);
 });
 
 test("production Telegram routing forwards callback queries", () => {
