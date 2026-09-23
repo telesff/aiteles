@@ -237,6 +237,20 @@ WHERE NOT EXISTS (SELECT 1 FROM leaderboard WHERE rank = 2);
 INSERT INTO leaderboard (rank, channel_name, handle, growth, period)
 SELECT 3, 'BinaryKings', '@binarykings', 7650, 'This Month'
 WHERE NOT EXISTS (SELECT 1 FROM leaderboard WHERE rank = 3);
+
+
+CREATE TABLE IF NOT EXISTS validation_audit (
+  id SERIAL PRIMARY KEY,
+  route TEXT NOT NULL,
+  telegram_id BIGINT,
+  input_raw TEXT NOT NULL,
+  input_norm TEXT,
+  code TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS validation_audit_user_time_idx
+  ON validation_audit (telegram_id, created_at DESC);
 `;
 
 async function setup() {
