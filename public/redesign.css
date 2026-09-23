@@ -532,7 +532,7 @@ button[aria-label="Close Teles Agent"]:active {
 
 /* 1. Scrollable home content must end above the floating nav + FAB zone */
 .rd-home {
-  padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(176px + env(safe-area-inset-bottom, 0px));
 }
 
 /* 2. Desktop: pin the AI FAB to the app column instead of the window edge */
