@@ -42,7 +42,19 @@ const MESSAGES = {
   SOFT_LOCKED:
     "Too many invalid attempts. Please wait a few minutes before trying again.",
   TG_UNAVAILABLE: "We couldn't verify the channel right now. Please try again.",
+  BOT_NOT_ADMIN: "Add this bot as an administrator of your channel, then try again.",
 };
+
+/* Constant-time hex signature compare (#42) — used by hardening + bundle patch */
+function sigEq(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== 64 || b.length !== 64) return false;
+  try {
+    return require("crypto").timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+  } catch (e) {
+    return false;
+  }
+}
 
 /* --------------------------------------------------------- pure validators */
 function normalizeChannelInput(raw) {
@@ -94,6 +106,7 @@ function validateFormat(raw) {
 const resolveCache = new Map(); /* username -> { ts, entry } */
 const rateBuckets = new Map();  /* userId -> [timestamps] */
 const failBuckets = new Map();  /* userId -> [timestamps] (#20 soft-lock) */
+const breaker = { streak: 0, openUntil: 0 }; /* #29 Telegram API circuit breaker */
 
 function prune(arr, windowMs, now) {
   while (arr.length && now - arr[0] > windowMs) arr.shift();
@@ -196,8 +209,30 @@ async function resolveUsername(username) {
   const cached = resolveCache.get(username);
   if (cached && Date.now() - cached.ts < RESOLVE_TTL_MS) return cached.entry;
 
+  /* #29 circuit breaker: open for 30s after 5 consecutive TG transport failures —
+     during an outage skip straight to fail-open "unavailable" (format checks
+     already ran). Half-open happens naturally when openUntil expires. */
+  if (breaker.openUntil && Date.now() < breaker.openUntil) {
+    return { ok: true, verified: "unavailable", chatId: null, botAdmin: null, members: null, title: null };
+  }
+
   let entry;
-  const chat = await tgGet("getChat", { chat_id: "@" + name });
+  let chat = await tgGet("getChat", { chat_id: "@" + name });
+  if (chat.transport) {
+    /* #28 bounded retry: exactly one retry after a short pause */
+    await new Promise((r) => setTimeout(r, 300));
+    chat = await tgGet("getChat", { chat_id: "@" + name });
+  }
+  if (chat.transport) {
+    breaker.streak += 1;
+    if (breaker.streak >= 5) {
+      breaker.openUntil = Date.now() + 30000;
+      breaker.streak = 0;
+    }
+  } else {
+    breaker.streak = 0;
+    breaker.openUntil = 0;
+  }
 
   if (chat.ok) {
     const type = chat.result.type;
@@ -301,8 +336,10 @@ function routeSpec(path, method) {
 /* ------------------------------------------------------------ main middleware */
 async function channelGuard(req, res, next) {
   try {
-    const path = (req.path || "").split("?")[0];
-    if (path.indexOf("/api/") !== 0) return next();
+    const rawPath = (req.path || "").split("?")[0];
+    /* #24 — treat /api/v1/* exactly like /api/* for all guard logic */
+    const path = rawPath === "/api/v1" ? "/api" : rawPath.indexOf("/api/v1/") === 0 ? "/api" + rawPath.slice(7) : rawPath;
+    req.normPath = path;
 
     /* ---- POST /api/channels/verify : live check endpoint for the UI (#5/#103) ---- */
     if (req.method === "POST" && path === "/api/channels/verify") {
@@ -407,6 +444,17 @@ async function channelGuard(req, res, next) {
 
     if (!req.isAdmin) clearFailures(userId);
 
+    /* #38 strict_bot_admin flag (#9 strict mode — off by default) */
+    if (
+      resolved.ok &&
+      resolved.verified === "telegram" &&
+      resolved.botAdmin === false &&
+      require("./flags.cjs").peekFlags().strict_bot_admin
+    ) {
+      auditRejection({ route: spec.route, userId: userId, raw: value, normalized: norm.value, code: "BOT_NOT_ADMIN" });
+      return sendError(res, 400, "BOT_NOT_ADMIN", spec.field);
+    }
+
     /* Canonical rewrite: handlers persist/notify the verified form (#2, #12) */
     body[spec.field] = norm.value;
     req.channelValidation = {
@@ -431,12 +479,14 @@ channelGuard.validateFormat = validateFormat;
 channelGuard.USERNAME_RE = USERNAME_RE;
 channelGuard.MESSAGES = MESSAGES;
 channelGuard.resolveUsername = resolveUsername;
+channelGuard.sigEq = sigEq;
 channelGuard._internal = {
   rateCheck: rateCheck,
   softLockCheck: softLockCheck,
   recordFailure: recordFailure,
   clearFailures: clearFailures,
   resolveCache: resolveCache,
+  breaker: breaker,
 };
 
 module.exports = channelGuard;

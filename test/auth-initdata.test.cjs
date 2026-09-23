@@ -123,6 +123,15 @@ test("auth: altered user after signing -> 401", async () => {
   assert.equal(res.status, 401);
 });
 
+test("auth: valid signature with extra unsigned param -> 401 (#44)", async () => {
+  const signed = signInitData(TOKEN, {
+    user: USER_A,
+    auth_date: String(Math.floor(Date.now() / 1000)),
+  });
+  const res = await postCampaign(signed + "&evil_extra=1");
+  assert.equal(res.status, 401);
+});
+
 test("auth: valid signature is accepted (never 401)", async () => {
   const signed = signInitData(TOKEN, {
     user: USER_A,
