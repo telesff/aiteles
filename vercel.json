@@ -16,5 +16,32 @@
       "path": "/api/internal/cron",
       "schedule": "17 0 * * *"
     }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=()"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://web.telegram.org; frame-src https://web.telegram.org; frame-ancestors 'self' https://web.telegram.org https://*.t.me; base-uri 'self'; object-src 'none'; form-action 'self'; upgrade-insecure-requests"
+        }
+      ]
+    }
   ]
 }
