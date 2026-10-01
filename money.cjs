@@ -523,7 +523,8 @@ async function packageCents(pkgId) {
 }
 
 module.exports = {
-  init, getPool, walletRow, getWallet, ensureWallet,
+  init, getPool,
+  setCampaignPriceCents: (id, cents) => q("UPDATE campaigns SET price_cents=$1 WHERE id=$2", [Math.round(cents), id]), walletRow, getWallet, ensureWallet,
   credit, spend, recordDirectPayment,
   transitionInvoice, adminInvoiceAction, createTopup, topupProof, refundPartial,
   isSoftLocked, expireStale, reconcile, recomputeLeaderboard,

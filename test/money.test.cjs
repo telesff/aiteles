@@ -328,6 +328,15 @@ test("reconcile: balanced after flows; doctoring wallet detected (#85)", async (
   assert.equal(back.ok, true);
 });
 
+/* ------------------------------------------------- append-only ledger (#60) */
+test("ledger: UPDATE and DELETE rejected at DB level (#60)", async () => {
+  let upd = null, del = null;
+  try { await testPool.query("UPDATE ledger_entries SET amount_cents = 1 WHERE id = (SELECT MIN(id) FROM ledger_entries)"); } catch (e) { upd = e; }
+  assert.ok(upd && /append-only/.test(upd.message), "UPDATE should be blocked: " + (upd && upd.message));
+  try { await testPool.query("DELETE FROM ledger_entries WHERE id = (SELECT MIN(id) FROM ledger_entries)"); } catch (e) { del = e; }
+  assert.ok(del && /append-only/.test(del.message), "DELETE should be blocked: " + (del && del.message));
+});
+
 /* ------------------------------------------------- refunds (#77/#79) */
 test("full refund: status machine + wallet credit + audit", async () => {
   const r = await api("/api/admin/invoices/" + topupInvoiceId, { method: "PATCH", uid: ADMIN, body: { status: "refunded", reason: "customer requested full refund" } });
