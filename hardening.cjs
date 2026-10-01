@@ -17,6 +17,7 @@ const schemas = require("./schemas.cjs");
 const flagsMod = require("./flags.cjs");
 const guard = require("./channel-guard.cjs");
 const sigEq = guard.sigEq;
+const money = require("./money.cjs");
 
 /* ------------------------------------------------------------ constants */
 const SECURITY_HEADERS = {
@@ -109,7 +110,7 @@ function getPool() {
   if (!url) { dbBroken = true; return null; }
   try {
     const { Pool } = require("pg");
-    dbPool = new Pool({ connectionString: url, max: 3, connectionTimeoutMillis: 3000, ssl: { rejectUnauthorized: false } });
+    dbPool = new Pool({ connectionString: url, max: 3, connectionTimeoutMillis: 3000, ssl: /sslmode=|pooler\.supabase/.test(url) ? { rejectUnauthorized: false } : false });
   } catch (e) { dbBroken = true; }
   return dbPool;
 }
@@ -167,11 +168,21 @@ async function handleCron(req, res) {
   /* invoice expiry sweep — pending > 24h → expired */
   if (p) {
     try {
-      const r = await p.query(
-        "UPDATE invoices SET status='expired' WHERE status='pending' AND created_at < NOW() - INTERVAL '24 hours'"
-      );
-      results.expiredInvoices = r.rowCount || 0;
+      const ex = await money.expireStale(24); /* #74 via state machine + expired_reason */
+      results.expiredInvoices = ex.ok ? ex.expired : 0;
+      if (!ex.ok) errors.push("invoice_expiry: " + (ex.error || "fail"));
     } catch (e) { errors.push("invoice_expiry: " + e.message); }
+
+    try {
+      const rec = await money.reconcile(); /* #85 invoices vs ledger vs balances */
+      results.reconciliation = rec.ok ? "balanced" : (rec.problems || []).slice(0, 5);
+      if (!rec.ok && typeof globalThis.__tn === "function") {
+        try { await globalThis.__tn("\u26a0\uFE0F <b>Money reconciliation mismatch</b>\n<pre>" + JSON.stringify((rec.problems || []).slice(0, 5)).replace(/</g, "&lt;") + "</pre>"); } catch (_) {}
+      }
+      const lb = await money.recomputeLeaderboard(); /* #80 raw-event recompute, server-side only */
+      results.leaderboardRows = lb.ok ? lb.rows : 0;
+      if (!lb.ok) errors.push("leaderboard: " + (lb.error || "fail"));
+    } catch (e) { errors.push("reconcile: " + e.message); }
 
     /* drain due jobs (#32 — Vercel-safe queue: DB rows + this runner) */
     try {
@@ -349,6 +360,36 @@ async function late(req, res, next) {
       }
     }
 
+    /* ---- Phase 3 money routes (#58–61, #71–85): auth'd (tk ran above),
+       admin invoice PATCH runs only after the admin gate above passed ---- */
+    try {
+      if (req.method === "GET" && path === "/api/wallet") {
+        if (!req.telegramUserId) return sendErr(res, 401, "UNAUTHENTICATED", "Telegram authentication required.", null, req.id);
+        const w = await money.getWallet(req.telegramUserId);
+        if (!w.ok) return sendErr(res, 500, "INTERNAL", "Wallet is temporarily unavailable.", null, req.id);
+        return res.json(w);
+      }
+      if (req.method === "POST" && path === "/api/wallet/topup") {
+        if (!req.telegramUserId) return sendErr(res, 401, "UNAUTHENTICATED", "Telegram authentication required.", null, req.id);
+        const t = await money.createTopup(req.telegramUserId, req.body || {});
+        if (!t.ok) return sendErr(res, t.status || 400, t.code, t.message, null, req.id);
+        return res.status(201).json({ ok: true, invoice: t.invoice });
+      }
+      const tpm = path.match(/^\/api\/wallet\/topup\/(\d+)\/proof$/);
+      if (req.method === "POST" && tpm) {
+        if (!req.telegramUserId) return sendErr(res, 401, "UNAUTHENTICATED", "Telegram authentication required.", null, req.id);
+        const t = await money.topupProof(req.telegramUserId, parseInt(tpm[1], 10), req.body || {});
+        if (!t.ok) return sendErr(res, t.status || 400, t.code, t.message, null, req.id);
+        return res.json({ ok: true, invoice: t.invoice });
+      }
+      const apm = path.match(/^\/api\/admin\/invoices\/(\d+)$/);
+      if (req.method === "PATCH" && apm) {
+        const out = await money.adminInvoiceAction(parseInt(apm[1], 10), req.telegramUserId, req.body || {});
+        if (!out.ok) return sendErr(res, out.status || 400, out.code, out.message || "Rejected.", null, req.id);
+        return res.json(out);
+      }
+    } catch (moneyErr) { return next(moneyErr); }
+
     /* #45 login rate limit */
     if (req.method === "POST" && path === "/api/auth/login" && req.telegramUserId) {
       const rl = hit(loginBuckets, "login:" + String(req.telegramUserId) + ":" + String(req.ip), LOGIN_LIMIT, 60000);
@@ -403,5 +444,7 @@ function errorHandler(err, req, res, next) {
     requestId: rid,
   });
 }
+
+try { money.init(getPool()); } catch (_) {}
 
 module.exports = { early, late, errorHandler, enqueue, normalizeApiPath };

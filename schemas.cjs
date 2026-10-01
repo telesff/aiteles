@@ -153,6 +153,20 @@ const ROUTES = [
       link: str(256),
       channelLink: optStr(256),
     }) },
+  /* ---- Phase 3 money ---- */
+  { m: "POST", re: /^\/api\/wallet\/topup$/, s: obj({
+      amountCents: z.coerce.number().int().min(100).max(10000000),
+      paymentMethod: optStr(32), paymentId: optStr(128), senderWallet: optStr(256), note: optStr(512),
+    }) },
+  { m: "POST", re: /^\/api\/wallet\/topup\/[^/]+\/proof$/, s: obj({
+      txid: optStr(256), transactionHash: optStr(256), senderAddress: optStr(256),
+      walletAddress: optStr(256), paymentMethod: optStr(32), paymentId: optStr(128),
+    }) },
+  { m: "PATCH", re: /^\/api\/admin\/invoices\/[^/]+$/, s: obj({
+      status: z.enum(["verification_submitted","paid","fulfilled","rejected","expired","cancelled","refunded"]).optional(),
+      reason: optStr(500), disputed: optBool(), deleted: optBool(),
+      refundAmountCents: z.coerce.number().int().min(100).max(10000000).optional(),
+    }) },
 ];
 const TABLE = ROUTES;
 

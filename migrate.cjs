@@ -17,7 +17,7 @@ async function main() {
     console.error("DATABASE_URL must be set.");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url, max: 2, ssl: { rejectUnauthorized: false } });
+  const pool = new Pool({ connectionString: url, max: 2, ssl: /sslmode=|pooler\.supabase/.test(url) ? { rejectUnauthorized: false } : false });
   const client = await pool.connect();
   try {
     await client.query(
