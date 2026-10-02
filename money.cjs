@@ -205,40 +205,30 @@ async function recordDirectPayment(o) {
   const cents = Math.round(o && o.cents ? o.cents : 0);
   if (!o || !o.telegramId || cents <= 0) return { ok: false, code: "SKIP" };
   const inv = o.invoiceId || null;
-  const base = `direct:${inv || "c" + o.campaignId}`;
-  const c1 = await credit(o.telegramId, cents, {
-    kind: "direct_payment", invoiceId: inv, campaignId: o.campaignId || null,
-    memo: "external payment: " + (o.packageName || ""), key: base + ":in",
-  });
-  const s1 = await spend(o.telegramId, cents, {
-    kind: "spend", invoiceId: inv, campaignId: o.campaignId || null,
-    memo: "funded campaign: " + (o.packageName || ""), key: base + ":out",
-  }).catch(() => ({ ok: false }));
-  /* spend from an empty wallet would fail — direct payments bypass balance:
-     ensure wallet exists then post legs manually if needed */
-  if (!s1.ok) {
-    await ensureWallet(o.telegramId);
-    const p = getPool();
-    try {
-      await p.query(
-        `INSERT INTO ledger_entries (telegram_id, amount_cents, kind, invoice_id, campaign_id, memo, idempotency_key)
-         VALUES ($1,$2,'spend',$3,$4,$5,$6) ON CONFLICT (idempotency_key) DO NOTHING`,
-        [o.telegramId, -cents, inv, o.campaignId || null, "funded campaign: " + (o.packageName || ""), base + ":out"]
-      );
-      /* balance guard: direct legs must net to zero */
-      await p.query(
-        `UPDATE wallets SET balance_cents = balance_cents + $1, updated_at = now()
-         WHERE telegram_id = $2`,
-        [0, o.telegramId]
-      );
-      /* if the wallet only has these two legs, balance = 0 naturally.
-         If wallet had prior balance it stays untouched (in + out). */
-    } catch (e) { logW("direct_leg_fail", e); }
+  const base = `direct:${o.telegramId}:${inv || "c" + o.campaignId}`; // user-scoped: idempotency_key is globally unique
+  const p = getPool();
+  if (!p) return { ok: false, code: "DB" };
+  try {
+    /* Net-zero documentation of an EXTERNALLY paid campaign.
+       Deliberately never touches `wallets`: users of the pay-per-invoice
+       flow must never become wallet-authoritative (2026-10-02: wallet UI
+       removed at owner's request; old flow only). */
+    await p.query(
+      `INSERT INTO ledger_entries (telegram_id, amount_cents, kind, invoice_id, campaign_id, memo, idempotency_key)
+       VALUES ($1,$2,'direct_payment',$3,$4,$5,$6) ON CONFLICT (idempotency_key) DO NOTHING`,
+      [o.telegramId, cents, inv, o.campaignId || null, "external payment: " + (o.packageName || ""), base + ":in"]
+    );
+    await p.query(
+      `INSERT INTO ledger_entries (telegram_id, amount_cents, kind, invoice_id, campaign_id, memo, idempotency_key)
+       VALUES ($1,$2,'spend',$3,$4,$5,$6) ON CONFLICT (idempotency_key) DO NOTHING`,
+      [o.telegramId, -cents, inv, o.campaignId || null, "funded campaign: " + (o.packageName || ""), base + ":out"]
+    );
+    return { ok: true };
+  } catch (e) {
+    logW("direct_leg_fail", e);
+    return { ok: false, code: "DB" };
   }
-  return { ok: true };
 }
-
-/* ------------------------------------------------- invoice actions (#71/#72/#77) */
 async function transitionInvoice(id, to, opts) {
   const o = opts || {};
   const p = getPool();

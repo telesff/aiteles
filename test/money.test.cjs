@@ -295,6 +295,17 @@ test("direct payment: two ledger legs net to zero, balance untouched", async () 
   assert.equal(w.balanceCents, 500);
   assert.ok(w.entries.some((e) => e.kind === "direct_payment" && e.amountCents === 19900));
   assert.ok(w.entries.some((e) => e.kind === "spend" && e.amountCents === -19900));
+
+  /* old-flow users must NEVER become wallet-authoritative (no prepay) */
+  const fresh = 999888777;
+  await money.recordDirectPayment({ telegramId: fresh, campaignId: legacyCampaignId, cents: 19900, packageName: "Premium" });
+  const fw = await money.getWallet(fresh);
+  assert.equal(fw.exists, false, "no wallet row for a pay-per-invoice user");
+  assert.equal(fw.balanceCents, 0, "direct legs net to zero");
+  const row = await testPool.query("SELECT count(*)::int AS n FROM wallets WHERE telegram_id=$1", [fresh]);
+  assert.equal(row.rows[0].n, 0, "no wallets row inserted");
+  const legs = await testPool.query("SELECT count(*)::int AS n FROM ledger_entries WHERE telegram_id=$1", [fresh]);
+  assert.equal(legs.rows[0].n, 2, "both ledger legs recorded");
 });
 
 /* ------------------------------------------------- guards: trigger + CHECK (#76/#71) */
