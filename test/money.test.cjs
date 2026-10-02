@@ -201,6 +201,16 @@ test("dispute: flags soft-lock campaign creation; clearing releases it", async (
 });
 
 /* ------------------------------------------------- fast-lane purchase #58/61 */
+test("txid reuse rejected: same TXID on a second topup -> 409 TXID_IN_USE", async () => {
+  const tx = "0xuiE2E" + Date.now();
+  const a1 = await api("/api/wallet/topup", { method: "POST", uid: U1, body: { amountCents: 2000, paymentMethod: "usdt_trc20", txid: tx } });
+  assert.equal(a1.status, 201);
+  assert.equal(a1.body.invoice.status, "verification_submitted");
+  const a2 = await api("/api/wallet/topup", { method: "POST", uid: U1, body: { amountCents: 2000, paymentMethod: "usdt_trc20", txid: tx } });
+  assert.equal(a2.status, 409);
+  assert.equal(a2.body.code, "TXID_IN_USE");
+});
+
 test("campaign create: wallet spend -> active + fulfilled receipt (#58/#59/#61)", async () => {
   const r = await api("/api/campaigns", { method: "POST", uid: U1, body: { packageId: PKG_ID, channelLink: "@walletpaid", audience: "crypto" } });
   assert.equal(r.status, 201);
@@ -222,6 +232,7 @@ test("campaign create: insufficient balance -> 402 INSUFFICIENT_BALANCE", async 
   assert.equal(r.status, 402);
   assert.equal(r.body.code, "INSUFFICIENT_BALANCE");
   assert.equal(r.body.balanceCents, 5100);
+  assert.equal(r.body.requiredCents, 19900);
 });
 
 test("campaign create: no wallet row -> legacy pending flow (no regression)", async () => {
@@ -379,6 +390,42 @@ test("campaign isolation: another user cannot read someone else's campaign (#82)
   assert.ok(r.status === 403 || r.status === 404, "other user got " + r.status);
   const own = await api("/api/campaigns/" + legacyCampaignId, { uid: UC });
   assert.equal(own.status, 200);
+});
+
+/* ------------------------------------- legacy admin UI compat (#72 one-click) */
+test("legacy admin UI: paid auto-fulfils topup once; failed maps to rejected", async () => {
+  const w0 = await api("/api/wallet", { uid: U1 });
+  const before = w0.body.balanceCents;
+
+  const t1 = await api("/api/wallet/topup", { method: "POST", uid: U1, body: { amountCents: 5000 } });
+  assert.equal(t1.status, 201);
+
+  /* old Admin Panel sends {status:"paid"} — must credit via auto-fulfil */
+  const ap = await api("/api/admin/invoices/" + t1.body.invoice.id, { method: "PATCH", uid: ADMIN, body: { status: "paid" } });
+  assert.equal(ap.status, 200);
+  assert.equal(ap.body.invoice.status, "fulfilled");
+
+  const w1 = await api("/api/wallet", { uid: U1 });
+  assert.equal(w1.body.balanceCents, before + 5000);
+
+  const led = await testPool.query("SELECT count(*)::int AS n FROM ledger_entries WHERE invoice_id=$1 AND kind='topup'", [t1.body.invoice.id]);
+  assert.equal(led.rows[0].n, 1, "exactly one credit row");
+
+  /* re-approve -> machine rejects (no double credit) */
+  const ap2 = await api("/api/admin/invoices/" + t1.body.invoice.id, { method: "PATCH", uid: ADMIN, body: { status: "paid" } });
+  assert.equal(ap2.status, 409);
+
+  /* old Reject button sends {status:"failed"} — aliased to rejected */
+  const t2 = await api("/api/wallet/topup", { method: "POST", uid: U1, body: { amountCents: 3000 } });
+  const rj = await api("/api/admin/invoices/" + t2.body.invoice.id, { method: "PATCH", uid: ADMIN, body: { status: "failed", reason: "no payment seen" } });
+  assert.equal(rj.status, 200);
+  assert.equal(rj.body.invoice.status, "rejected");
+
+  const w2 = await api("/api/wallet", { uid: U1 });
+  assert.equal(w2.body.balanceCents, before + 5000, "rejected topup credits nothing");
+
+  const rec = await money.reconcile();
+  assert.equal(rec.ok, true, JSON.stringify(rec));
 });
 
 /* ------------------------------------------------- soft-delete (#83) */

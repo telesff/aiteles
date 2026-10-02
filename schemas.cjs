@@ -163,7 +163,7 @@ const ROUTES = [
       walletAddress: optStr(256), paymentMethod: optStr(32), paymentId: optStr(128),
     }) },
   { m: "PATCH", re: /^\/api\/admin\/invoices\/[^/]+$/, s: obj({
-      status: z.enum(["verification_submitted","paid","fulfilled","rejected","expired","cancelled","refunded"]).optional(),
+      status: z.enum(["verification_submitted","paid","fulfilled","rejected","expired","cancelled","refunded","failed"]).optional(), /* "failed" = legacy alias for rejected */
       reason: optStr(500), disputed: optBool(), deleted: optBool(),
       refundAmountCents: z.coerce.number().int().min(100).max(10000000).optional(),
     }) },

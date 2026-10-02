@@ -373,6 +373,19 @@ async function late(req, res, next) {
         if (!req.telegramUserId) return sendErr(res, 401, "UNAUTHENTICATED", "Telegram authentication required.", null, req.id);
         const t = await money.createTopup(req.telegramUserId, req.body || {});
         if (!t.ok) return sendErr(res, t.status || 400, t.code, t.message, null, req.id);
+        try {
+          if (globalThis.__tn && t.invoice) {
+            const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+            globalThis.__tn(
+              "\ud83d\udcb0 <b>Wallet Top-Up Request</b>\n\n" +
+              "\ud83d\udc64 <b>User:</b> " + esc(req.telegramUserId) + "\n" +
+              "\ud83d\udcb5 <b>Amount:</b> $" + (Number(t.invoice.amount_cents || 0) / 100).toFixed(2) + "\n" +
+              "\ud83c\udf10 <b>Method:</b> " + esc(t.invoice.payment_method || "usdt_trc20") + "\n" +
+              "\ud83e\udcfe <b>Invoice:</b> " + esc(t.invoice.invoice_number) + "\n\n" +
+              "Awaiting verification in Admin \u2192 Invoices."
+            );
+          }
+        } catch (_) {}
         return res.status(201).json({ ok: true, invoice: t.invoice });
       }
       const tpm = path.match(/^\/api\/wallet\/topup\/(\d+)\/proof$/);

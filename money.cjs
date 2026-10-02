@@ -292,6 +292,7 @@ async function transitionInvoice(id, to, opts) {
  */
 async function adminInvoiceAction(id, actor, body) {
   body = body || {};
+  if (body.status === "failed") body = Object.assign({}, body, { status: "rejected" }); /* legacy admin UI alias */
   try {
     const before = (await q("SELECT * FROM invoices WHERE id=$1", [id])).rows[0];
     if (!before || before.deleted_at) return { ok: false, status: 404, code: "NOT_FOUND", message: "Invoice not found." };
@@ -319,7 +320,7 @@ async function adminInvoiceAction(id, actor, body) {
     }
 
     if (body.status) {
-      const tr = await transitionInvoice(id, body.status, { actor, reason: body.reason });
+      let tr = await transitionInvoice(id, body.status, { actor, reason: body.reason });
       if (!tr.ok) return tr;
       if (body.status === "refunded" && tr.invoice && Number(tr.invoice.refunded_cents || 0) < Number(tr.invoice.amount_cents || 0)) {
         const amt = Number(tr.invoice.amount_cents || 0);
@@ -330,6 +331,11 @@ async function adminInvoiceAction(id, actor, body) {
           await q("UPDATE invoices SET refunded_cents = amount_cents WHERE id=$1", [id]);
           await audit(actor, "refund_credited", "invoice", id, body.reason || "", { amountCents: amt }, { refundedCents: amt, balanceCents: cr.balanceCents });
         }
+      }
+      /* legacy admin UI one-click approve: `paid` on a top-up auto-fulfils (#72) */
+      if (body.status === "paid" && tr.invoice && tr.invoice.kind === "topup") {
+        const tr2 = await transitionInvoice(id, "fulfilled", { actor, reason: body.reason || "auto-fulfilled on approval" });
+        if (tr2.ok) { tr = tr2; body = Object.assign({}, body, { status: "fulfilled" }); }
       }
       /* wallet credit for top-up fulfilment (#72 — exactly once) */
       if (body.status === "fulfilled" && tr.invoice.kind === "topup") {
@@ -376,6 +382,9 @@ async function createTopup(tgId, body) {
     await audit(tgId, "topup_created", "invoice", r.rows[0].id, "", null, { amountCents: cents });
     return { ok: true, invoice: r.rows[0] };
   } catch (e) {
+    if (e && e.code === "23505" && /payment_id/i.test(String(e.constraint || e.message || ""))) {
+      return { ok: false, status: 409, code: "TXID_IN_USE", message: "That transaction ID was already used. Each payment can only be submitted once." };
+    }
     logW("topup_fail", e);
     return { ok: false, status: 500, code: "DB", error: String(e.message).slice(0, 200) };
   }
@@ -395,6 +404,9 @@ async function topupProof(tgId, id, body) {
     ]);
     return { ok: true, invoice: (await q("SELECT * FROM invoices WHERE id=$1", [id])).rows[0] };
   } catch (e) {
+    if (e && e.code === "23505" && /payment_id/i.test(String(e.constraint || e.message || ""))) {
+      return { ok: false, status: 409, code: "TXID_IN_USE", message: "That transaction ID was already used. Each payment can only be submitted once." };
+    }
     logW("topup_proof_fail", e);
     return { ok: false, status: 500, code: "DB", error: String(e.message).slice(0, 200) };
   }
