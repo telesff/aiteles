@@ -87,9 +87,8 @@ test("valid forms normalize to canonical lowercase @username", () => {
     ["https://t.me/s/durov", "@durov"],
     ["https://t.me/durov?single", "@durov"],
     ["@durov", "@durov"],
-    ["durov", "@durov"],
     ["  @durov  ", "@durov"],
-    ["TELESADS", "@telesads"],
+    ["@TELESADS", "@telesads"],
   ];
   for (const [input, want] of cases) {
     const r = norm(input);
@@ -175,4 +174,22 @@ test("channel resolution: private invite link routes to resolveInviteLink / chec
   if (res.ok) {
     assert.equal(res.isPrivate, true);
   }
+});
+
+test("bare names without @ are refused (e.g. durov, hhjagwv)", () => {
+  assert.ok(norm("durov").code !== null);
+  assert.ok(norm("hhjagwv").code !== null);
+  assert.ok(norm("telesads").code !== null);
+});
+
+test("user example link https://t.me/+cR5fEzhYSaNiYjQ0 is accepted and never refused", async () => {
+  const input = "https://t.me/+cR5fEzhYSaNiYjQ0";
+  const r = norm(input);
+  assert.equal(r.code, null);
+  assert.equal(r.value, "https://t.me/+cR5fEzhYSaNiYjQ0");
+  assert.equal(r.isPrivate, true);
+
+  const res = await guard.resolveChannel(r);
+  assert.equal(res.ok, true);
+  assert.equal(res.isPrivate, true);
 });

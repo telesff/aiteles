@@ -76,11 +76,11 @@
   function parsePrivateInvite(raw) {
     if (typeof raw !== "string") return null;
     var s = raw.trim();
-    var m1 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/\+([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i);
+    var m1 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/\+([A-Za-z0-9_-]{6,64})(?:[/?#].*)?$/i);
     if (m1) return { hash: m1[1], canonical: "https://t.me/+" + m1[1] };
-    var m2 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/joinchat\/([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i);
+    var m2 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/joinchat\/([A-Za-z0-9_-]{6,64})(?:[/?#].*)?$/i);
     if (m2) return { hash: m2[1], canonical: "https://t.me/+" + m2[1] };
-    var m3 = s.match(/^\+([A-Za-z0-9_-]{10,64})$/);
+    var m3 = s.match(/^\+([A-Za-z0-9_-]{6,64})$/);
     if (m3) return { hash: m3[1], canonical: "https://t.me/+" + m3[1] };
     return null;
   }
@@ -90,24 +90,42 @@
     var s = v.trim().replace(/\s+/g, " ");
     if (!s) return { code: "EMPTY_FIELD", value: "" };
     if (/[\u0000-\u001F\u007F<>"'`\\{}$;]/.test(s)) return { code: "INVALID_FORMAT", value: s };
-    var priv = parsePrivateInvite(s);
-    if (priv) return { code: null, value: priv.canonical, isPrivate: true };
-    var m = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z][A-Za-z0-9_]{0,31})(?:[/?#].*)?$/i);
-    if (m) return { code: null, value: "@" + m[1].toLowerCase() };
-    if (s.charAt(0) === "@") {
-      if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(s.slice(1))) return { code: "INVALID_FORMAT", value: s };
-      return { code: null, value: "@" + s.slice(1).toLowerCase() };
+
+    /* 1. Any t.me/ or telegram.me/ link -> ALWAYS ACCEPT */
+    var tmeMatch = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/([^\s]+)$/i);
+    if (tmeMatch) {
+      var path = tmeMatch[1].replace(/\/+$/, "");
+      if (!path) return { code: "INVALID_FORMAT", value: s };
+      var priv = parsePrivateInvite(s);
+      if (priv) return { code: null, value: priv.canonical, isPrivate: true };
+      var clean = path.split("?")[0].split("#")[0].replace(/^s\//i, "");
+      if (/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(clean)) {
+        return { code: null, value: "@" + clean.toLowerCase(), isPrivate: false };
+      }
+      return { code: null, value: "https://t.me/" + path, isPrivate: true };
     }
-    if (/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(s)) return { code: null, value: "@" + s.toLowerCase() };
+
+    /* 2. Bare +hash invite link -> accept */
+    var privBare = parsePrivateInvite(s);
+    if (privBare) return { code: null, value: privBare.canonical, isPrivate: true };
+
+    /* 3. Handle with @ -> accept */
+    if (s.charAt(0) === "@") {
+      var name = s.slice(1);
+      if (!/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name)) return { code: "INVALID_FORMAT", value: s };
+      return { code: null, value: "@" + name.toLowerCase(), isPrivate: false };
+    }
+
+    /* 4. Anything without @ -> REFUSE */
     return { code: "INVALID_FORMAT", value: s };
   }
 
   /* Server error copy by code (#106) — server remains source of truth */
   var COPY = {
     EMPTY_FIELD: "Channel link is required.",
-    INVALID_FORMAT: "That doesn't look like a valid Telegram link. Use @username, t.me/..., or a private invite link (t.me/+...).",
-    PRIVATE_LINK: "That private invite link is invalid or expired. Check the link and try again.",
-    NOT_FOUND: "We couldn't find that channel or invite link on Telegram. Check the spelling.",
+    INVALID_FORMAT: "Please enter a valid Telegram link (https://t.me/...) or channel username with @ (@channel).",
+    PRIVATE_LINK: "Private link received.",
+    NOT_FOUND: "We couldn't find that public channel on Telegram. Check the spelling.",
     NOT_CHANNEL: "That link points to a user or group, not a channel.",
     RATE_LIMITED: "Too many checks right now. Wait a moment and try again.",
     SOFT_LOCKED: "Too many invalid attempts. Please wait a few minutes.",
@@ -197,7 +215,7 @@
     var helper = document.createElement("p");
     helper.className = "tv-helper";
     helper.id = id + "-help";
-    helper.textContent = "Use @username, t.me/channel, or private invite link (t.me/+...) — verified with Telegram.";
+    helper.textContent = "Paste any Telegram link (https://t.me/...) or channel handle (@channel).";
 
     /* status (#102, #103) */
     var status = document.createElement("div");

@@ -32,11 +32,11 @@ const USERNAME_RE = /^[A-Za-z][A-Za-z0-9_]{4,31}$/;
 const MESSAGES = {
   EMPTY_FIELD: "Channel link is required.",
   INVALID_FORMAT:
-    "That doesn't look like a valid Telegram link. Use @username, t.me/username, or a private invite link (t.me/+...).",
+    "Please enter a valid Telegram link (https://t.me/...) or channel username with @ (@channel).",
   PRIVATE_LINK:
-    "That private invite link is invalid or expired. Check the link and try again.",
+    "Private link received.",
   NOT_FOUND:
-    "We couldn't find that channel or invite link on Telegram. Check the link and try again.",
+    "We couldn't find that public channel on Telegram. Check the spelling or use a t.me link.",
   NOT_CHANNEL: "That link points to a user or group, not a channel.",
   RATE_LIMITED: "Too many checks right now. Please wait a moment and try again.",
   SOFT_LOCKED:
@@ -60,11 +60,11 @@ function sigEq(a, b) {
 function parsePrivateInvite(raw) {
   if (typeof raw !== "string") return null;
   const s = raw.trim();
-  const m1 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/\+([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i);
+  const m1 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/\+([A-Za-z0-9_-]{6,64})(?:[/?#].*)?$/i);
   if (m1) return { hash: m1[1], canonical: "https://t.me/+" + m1[1] };
-  const m2 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/joinchat\/([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i);
+  const m2 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/joinchat\/([A-Za-z0-9_-]{6,64})(?:[/?#].*)?$/i);
   if (m2) return { hash: m2[1], canonical: "https://t.me/+" + m2[1] };
-  const m3 = s.match(/^\+([A-Za-z0-9_-]{10,64})$/);
+  const m3 = s.match(/^\+([A-Za-z0-9_-]{6,64})$/);
   if (m3) return { hash: m3[1], canonical: "https://t.me/+" + m3[1] };
   return null;
 }
@@ -79,31 +79,43 @@ function normalizeChannelInput(raw) {
     return { code: "INVALID_FORMAT", value: s };
   }
 
-  /* Private invite links - now fully accepted and normalized to https://t.me/+<hash> */
+  /* 1. Any t.me/ or telegram.me/ link -> ALWAYS ACCEPT */
+  const tmeMatch = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/([^\s]+)$/i);
+  if (tmeMatch) {
+    const path = tmeMatch[1].replace(/\/+$/, "");
+    if (!path) return { code: "INVALID_FORMAT", value: s };
+
+    const priv = parsePrivateInvite(s);
+    if (priv) {
+      return { code: null, value: priv.canonical, isPrivate: true, inviteHash: priv.hash };
+    }
+
+    // Clean public path
+    const clean = path.split("?")[0].split("#")[0].replace(/^s\//i, "");
+    if (/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(clean)) {
+      return { code: null, value: "@" + clean.toLowerCase(), isPrivate: false, rawUrl: "https://t.me/" + path };
+    }
+
+    // Any other t.me link (custom link, private invite, etc.) -> accept as canonical https://t.me/<path>
+    return { code: null, value: "https://t.me/" + path, isPrivate: true };
+  }
+
+  /* 2. Bare +hash invite link -> accept */
   const priv = parsePrivateInvite(s);
   if (priv) {
     return { code: null, value: priv.canonical, isPrivate: true, inviteHash: priv.hash };
   }
 
-  /* URL forms: (https?://)? (www.)? (t.me|telegram.me) / [s/] username ... */
-  const urlMatch = s.match(
-    /^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z][A-Za-z0-9_]{0,31})(?:[/?#].*)?$/i
-  );
-  if (urlMatch) return { code: null, value: "@" + urlMatch[1].toLowerCase(), isPrivate: false };
-
-  /* Bare @username */
+  /* 3. Handle with @ -> accept */
   if (s.charAt(0) === "@") {
     const name = s.slice(1);
-    if (!USERNAME_RE.test(name)) return { code: "INVALID_FORMAT", value: s };
+    if (!/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name)) {
+      return { code: "INVALID_FORMAT", value: s };
+    }
     return { code: null, value: "@" + name.toLowerCase(), isPrivate: false };
   }
 
-  /* Bare username (typed without @). "hhjagwv" passes FORMAT here and is
-     caught by Telegram resolution below (#7) - format alone cannot know. */
-  if (/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(s)) {
-    return { code: null, value: "@" + s.toLowerCase(), isPrivate: false };
-  }
-
+  /* 4. Anything without @ (like plain text or bare words 'durov', 'hhjagwv') -> REFUSE without @ */
   return { code: "INVALID_FORMAT", value: s };
 }
 
@@ -214,53 +226,32 @@ function tgGet(method, params, timeoutMs) {
  *  ok:false { code } definitive reject (hhjagwv lands here as NOT_FOUND)
  */
 async function resolveInviteLink(inviteHash, canonical) {
-  const cacheKey = canonical || ("https://t.me/+" + inviteHash);
+  const cacheKey = canonical || ("https://t.me/+" + (inviteHash || ""));
   const cached = resolveCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < RESOLVE_TTL_MS) return cached.entry;
 
-  if (breaker.openUntil && Date.now() < breaker.openUntil) {
-    return { ok: true, verified: "unavailable", chatId: null, botAdmin: null, members: null, title: null, isPrivate: true };
-  }
+  let entry = {
+    ok: true,
+    verified: "link",
+    chatId: null,
+    type: "channel",
+    title: canonical,
+    members: null,
+    botAdmin: null,
+    isPrivate: true,
+  };
 
-  let entry;
-  let check = await tgGet("checkChatInviteLink", { invite_link_hash: inviteHash });
-  if (check.transport) {
-    await new Promise((r) => setTimeout(r, 300));
-    check = await tgGet("checkChatInviteLink", { invite_link_hash: inviteHash });
-  }
-  if (check.transport) {
-    breaker.streak += 1;
-    if (breaker.streak >= 5) {
-      breaker.openUntil = Date.now() + 30000;
-      breaker.streak = 0;
-    }
-  } else {
-    breaker.streak = 0;
-    breaker.openUntil = 0;
-  }
-
-  if (check.ok) {
-    const res = check.result || {};
-    const type = res.type;
-    if (type && type !== "channel" && type !== "supergroup") {
-      entry = { ok: false, code: "NOT_CHANNEL" };
-    } else {
-      entry = {
-        ok: true,
-        verified: "telegram",
-        chatId: res.chat_id || null,
-        type: type || "channel",
-        title: res.title || null,
-        members: typeof res.member_count === "number" ? res.member_count : null,
-        botAdmin: null,
-        isPrivate: true,
-      };
-    }
-  } else if (check.transport) {
-    entry = { ok: true, verified: "unavailable", chatId: null, botAdmin: null, members: null, title: null, isPrivate: true };
-  } else {
-    /* 404 / expired / revoked invite link */
-    entry = { ok: false, code: "NOT_FOUND" };
+  if (inviteHash) {
+    try {
+      let check = await tgGet("checkChatInviteLink", { invite_link_hash: inviteHash });
+      if (check.ok && check.result) {
+        entry.verified = "telegram";
+        entry.chatId = check.result.chat_id || null;
+        entry.type = check.result.type || "channel";
+        entry.title = check.result.title || canonical;
+        if (typeof check.result.member_count === "number") entry.members = check.result.member_count;
+      }
+    } catch (_) {}
   }
 
   resolveCache.set(cacheKey, { ts: Date.now(), entry: entry });
@@ -268,10 +259,12 @@ async function resolveInviteLink(inviteHash, canonical) {
 }
 
 /**
- * Universal resolution helper for both @username and private invite links.
+ * Universal resolution helper:
+ * - Any t.me private/custom link -> ALWAYS ACCEPT (never refuse)
+ * - Public @username -> resolve via Telegram getChat
  */
 async function resolveChannel(normResult) {
-  if (normResult.isPrivate && normResult.inviteHash) {
+  if (normResult.isPrivate || normResult.value.startsWith("https://t.me/")) {
     return resolveInviteLink(normResult.inviteHash, normResult.value);
   }
   return resolveUsername(normResult.value);
