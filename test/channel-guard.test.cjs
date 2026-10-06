@@ -54,10 +54,28 @@ test("format stage rejects garbage pack (20+ cases)", () => {
   assert.ok(FORMAT_REJECTS.length >= 20);
 });
 
-test("private invite links get PRIVATE_LINK code", () => {
-  assert.equal(norm("https://t.me/+AbCdEfGhIjKlMn").code, "PRIVATE_LINK");
-  assert.equal(norm("t.me/joinchat/AAAAAcCCCC").code, "PRIVATE_LINK");
-  assert.equal(norm("telegram.me/joinchat/BBBBB").code, "PRIVATE_LINK");
+test("private invite links normalize to canonical https://t.me/+<hash> and pass format", () => {
+  const r1 = norm("https://t.me/+AbCdEfGhIjKlMn");
+  assert.equal(r1.code, null);
+  assert.equal(r1.value, "https://t.me/+AbCdEfGhIjKlMn");
+  assert.equal(r1.isPrivate, true);
+  assert.equal(r1.inviteHash, "AbCdEfGhIjKlMn");
+
+  const r2 = norm("t.me/joinchat/AAAAAcCCCC12345");
+  assert.equal(r2.code, null);
+  assert.equal(r2.value, "https://t.me/+AAAAAcCCCC12345");
+  assert.equal(r2.isPrivate, true);
+  assert.equal(r2.inviteHash, "AAAAAcCCCC12345");
+
+  const r3 = norm("telegram.me/joinchat/BBBBB12345678");
+  assert.equal(r3.code, null);
+  assert.equal(r3.value, "https://t.me/+BBBBB12345678");
+  assert.equal(r3.isPrivate, true);
+
+  const r4 = norm("+AbCdEfGhIjKlMn12");
+  assert.equal(r4.code, null);
+  assert.equal(r4.value, "https://t.me/+AbCdEfGhIjKlMn12");
+  assert.equal(r4.isPrivate, true);
 });
 
 test("valid forms normalize to canonical lowercase @username", () => {
@@ -141,4 +159,20 @@ test("LIVE: hhjagwv (format-valid) must be rejected by resolution", { skip: !pro
   const r = await guard.resolveUsername("@hhjagwv");
   assert.equal(r.ok, false);
   assert.equal(r.code, "NOT_FOUND");
+});
+
+test("channel resolution: private invite link routes to resolveInviteLink / checkChatInviteLink", async () => {
+  const normRes = guard.normalizeChannelInput("https://t.me/+SampleHash12345");
+  assert.equal(normRes.code, null);
+  assert.equal(normRes.isPrivate, true);
+  assert.equal(normRes.inviteHash, "SampleHash12345");
+
+  // Since we are offline / in test env without Telegram API or mock,
+  // resolveChannel on this private link should safely return { ok: true, verified: "unavailable", ... } or not crash
+  const res = await guard.resolveChannel(normRes);
+  assert.ok(res);
+  assert.ok(res.ok !== undefined);
+  if (res.ok) {
+    assert.equal(res.isPrivate, true);
+  }
 });

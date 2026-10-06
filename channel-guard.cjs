@@ -32,11 +32,11 @@ const USERNAME_RE = /^[A-Za-z][A-Za-z0-9_]{4,31}$/;
 const MESSAGES = {
   EMPTY_FIELD: "Channel link is required.",
   INVALID_FORMAT:
-    "That doesn't look like a channel. Use @username or a t.me/username link.",
+    "That doesn't look like a valid Telegram link. Use @username, t.me/username, or a private invite link (t.me/+...).",
   PRIVATE_LINK:
-    "Private invite links aren't supported. Use the channel's public @username or t.me/username link.",
+    "That private invite link is invalid or expired. Check the link and try again.",
   NOT_FOUND:
-    "We couldn't find that channel on Telegram. Check the spelling - it must be a public channel.",
+    "We couldn't find that channel or invite link on Telegram. Check the link and try again.",
   NOT_CHANNEL: "That link points to a user or group, not a channel.",
   RATE_LIMITED: "Too many checks right now. Please wait a moment and try again.",
   SOFT_LOCKED:
@@ -57,6 +57,18 @@ function sigEq(a, b) {
 }
 
 /* --------------------------------------------------------- pure validators */
+function parsePrivateInvite(raw) {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  const m1 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/\+([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i);
+  if (m1) return { hash: m1[1], canonical: "https://t.me/+" + m1[1] };
+  const m2 = s.match(/^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/joinchat\/([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i);
+  if (m2) return { hash: m2[1], canonical: "https://t.me/+" + m2[1] };
+  const m3 = s.match(/^\+([A-Za-z0-9_-]{10,64})$/);
+  if (m3) return { hash: m3[1], canonical: "https://t.me/+" + m3[1] };
+  return null;
+}
+
 function normalizeChannelInput(raw) {
   if (typeof raw !== "string") return { code: "INVALID_FORMAT", value: "" };
   let s = raw.trim().replace(/\s+/g, " ");
@@ -67,32 +79,29 @@ function normalizeChannelInput(raw) {
     return { code: "INVALID_FORMAT", value: s };
   }
 
-  /* Private invite links - distinct code (#3) */
-  if (
-    /t\.me\/\+/i.test(s) ||
-    /t\.me\/joinchat\//i.test(s) ||
-    /telegram\.me\/joinchat\//i.test(s)
-  ) {
-    return { code: "PRIVATE_LINK", value: s };
+  /* Private invite links - now fully accepted and normalized to https://t.me/+<hash> */
+  const priv = parsePrivateInvite(s);
+  if (priv) {
+    return { code: null, value: priv.canonical, isPrivate: true, inviteHash: priv.hash };
   }
 
   /* URL forms: (https?://)? (www.)? (t.me|telegram.me) / [s/] username ... */
   const urlMatch = s.match(
     /^(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z][A-Za-z0-9_]{0,31})(?:[/?#].*)?$/i
   );
-  if (urlMatch) return { code: null, value: "@" + urlMatch[1].toLowerCase() };
+  if (urlMatch) return { code: null, value: "@" + urlMatch[1].toLowerCase(), isPrivate: false };
 
   /* Bare @username */
   if (s.charAt(0) === "@") {
     const name = s.slice(1);
     if (!USERNAME_RE.test(name)) return { code: "INVALID_FORMAT", value: s };
-    return { code: null, value: "@" + name.toLowerCase() };
+    return { code: null, value: "@" + name.toLowerCase(), isPrivate: false };
   }
 
   /* Bare username (typed without @). "hhjagwv" passes FORMAT here and is
      caught by Telegram resolution below (#7) - format alone cannot know. */
   if (/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(s)) {
-    return { code: null, value: "@" + s.toLowerCase() };
+    return { code: null, value: "@" + s.toLowerCase(), isPrivate: false };
   }
 
   return { code: "INVALID_FORMAT", value: s };
@@ -204,6 +213,70 @@ function tgGet(method, params, timeoutMs) {
  *  ok:true  verified:"telegram" (getChat) | "link_probe" (t.me page) | "unavailable"
  *  ok:false { code } definitive reject (hhjagwv lands here as NOT_FOUND)
  */
+async function resolveInviteLink(inviteHash, canonical) {
+  const cacheKey = canonical || ("https://t.me/+" + inviteHash);
+  const cached = resolveCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < RESOLVE_TTL_MS) return cached.entry;
+
+  if (breaker.openUntil && Date.now() < breaker.openUntil) {
+    return { ok: true, verified: "unavailable", chatId: null, botAdmin: null, members: null, title: null, isPrivate: true };
+  }
+
+  let entry;
+  let check = await tgGet("checkChatInviteLink", { invite_link_hash: inviteHash });
+  if (check.transport) {
+    await new Promise((r) => setTimeout(r, 300));
+    check = await tgGet("checkChatInviteLink", { invite_link_hash: inviteHash });
+  }
+  if (check.transport) {
+    breaker.streak += 1;
+    if (breaker.streak >= 5) {
+      breaker.openUntil = Date.now() + 30000;
+      breaker.streak = 0;
+    }
+  } else {
+    breaker.streak = 0;
+    breaker.openUntil = 0;
+  }
+
+  if (check.ok) {
+    const res = check.result || {};
+    const type = res.type;
+    if (type && type !== "channel" && type !== "supergroup") {
+      entry = { ok: false, code: "NOT_CHANNEL" };
+    } else {
+      entry = {
+        ok: true,
+        verified: "telegram",
+        chatId: res.chat_id || null,
+        type: type || "channel",
+        title: res.title || null,
+        members: typeof res.member_count === "number" ? res.member_count : null,
+        botAdmin: null,
+        isPrivate: true,
+      };
+    }
+  } else if (check.transport) {
+    entry = { ok: true, verified: "unavailable", chatId: null, botAdmin: null, members: null, title: null, isPrivate: true };
+  } else {
+    /* 404 / expired / revoked invite link */
+    entry = { ok: false, code: "NOT_FOUND" };
+  }
+
+  resolveCache.set(cacheKey, { ts: Date.now(), entry: entry });
+  return entry;
+}
+
+/**
+ * Universal resolution helper for both @username and private invite links.
+ */
+async function resolveChannel(normResult) {
+  if (normResult.isPrivate && normResult.inviteHash) {
+    return resolveInviteLink(normResult.inviteHash, normResult.value);
+  }
+  return resolveUsername(normResult.value);
+}
+
 async function resolveUsername(username) {
   const name = username.replace(/^@/, "");
   const cached = resolveCache.get(username);
@@ -370,7 +443,7 @@ async function channelGuard(req, res, next) {
         auditRejection({ route: "verify", userId: vuserId, raw: vraw, normalized: vnorm.value, code: vnorm.code });
         return sendError(res, 400, vnorm.code, "link");
       }
-      const vresolved = await resolveUsername(vnorm.value);
+      const vresolved = await resolveChannel(vnorm);
       if (!vresolved.ok) {
         recordFailure(String(vuserId));
         auditRejection({ route: "verify", userId: vuserId, raw: vraw, normalized: vnorm.value, code: vresolved.code });
@@ -435,7 +508,7 @@ async function channelGuard(req, res, next) {
       }
     }
 
-    const resolved = await resolveUsername(norm.value);
+    const resolved = await resolveChannel(norm);
     if (!resolved.ok) {
       if (!req.isAdmin) recordFailure(userId);
       auditRejection({ route: spec.route, userId: userId, raw: value, normalized: norm.value, code: resolved.code });
@@ -476,9 +549,12 @@ async function channelGuard(req, res, next) {
 /* exports - middleware + pure helpers for the test suite */
 channelGuard.normalizeChannelInput = normalizeChannelInput;
 channelGuard.validateFormat = validateFormat;
+channelGuard.parsePrivateInvite = parsePrivateInvite;
 channelGuard.USERNAME_RE = USERNAME_RE;
 channelGuard.MESSAGES = MESSAGES;
 channelGuard.resolveUsername = resolveUsername;
+channelGuard.resolveInviteLink = resolveInviteLink;
+channelGuard.resolveChannel = resolveChannel;
 channelGuard.sigEq = sigEq;
 channelGuard._internal = {
   rateCheck: rateCheck,

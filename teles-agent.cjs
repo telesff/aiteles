@@ -223,7 +223,7 @@ AGENT POWERS:
 - Report explainer: translate delivery, member target, reach, clicks, and conversion into plain English.
 - Compliance guard: avoid guaranteed profit, risk-free claims, fake urgency, and unsafe financial promises.
 
-HOW TO BUY: users open the Mini App (${APP_URL}), pick a package, submit their channel link, and the campaign starts after review. Support: ${AGENCY_TG} or /support.
+HOW TO BUY: users open the Mini App (${APP_URL}), pick a package, submit their channel link (both public @channels and private invite links like t.me/+... are fully supported!), and the campaign starts after review. Support: ${AGENCY_TG} or /support.
 
 YOUR STYLE:
 - Friendly, sharp, and concise — this is Telegram chat, keep answers short (under 200 words unless asked for detail).
@@ -499,7 +499,10 @@ async function runCopyAnalysis(ctx, target) {
     if (pending?.message_id) await tgEdit(chatId, pending.message_id, html, keyboard);
     else await tgSend(chatId, html, keyboard);
   } catch (error) {
-    const message = `Could not analyze that channel: ${escapeHtml(error.message)}\n\nOnly public Telegram channels can be analyzed.`;
+    const isPriv = /(?:t\.me|telegram\.me)\/(\+|joinchat\/)/i.test(target) || /^\+[A-Za-z0-9_-]{10,64}$/.test(target);
+    const message = isPriv
+      ? `<b>Private channel detected</b>: Private invite links can run campaigns in TELES ADS, but competitor post analysis (/copy) requires public post data.\n\nTo grow this private channel, open the campaign builder in TELES ADS:`
+      : `Could not analyze that channel: ${escapeHtml(error.message)}\n\nOnly public Telegram channels have readable post history for the /copy command.`;
     if (pending?.message_id) await tgEdit(chatId, pending.message_id, message);
     else await tgSend(chatId, message);
   }
